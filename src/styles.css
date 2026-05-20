@@ -1,0 +1,181 @@
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #0b0d10;
+  color: #e8d6a8;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+#canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
+/* Click-to-start / file picker overlay */
+.overlay {
+  position: fixed; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(11, 13, 16, 0.62);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  z-index: 10;
+  transition: opacity 0.18s ease;
+}
+.overlay.hidden { opacity: 0; pointer-events: none; }
+
+.overlay-card {
+  background: rgba(20, 22, 26, 0.92);
+  border: 1px solid rgba(232, 214, 168, 0.18);
+  border-radius: 16px;
+  padding: 28px 32px;
+  max-width: 420px;
+  text-align: center;
+}
+.overlay-card h1 {
+  margin: 0 0 8px;
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.overlay-card p { margin: 6px 0; line-height: 1.45; }
+.overlay-card .muted { color: rgba(232, 214, 168, 0.6); font-size: 14px; }
+.overlay-card .small { font-size: 12px; margin-top: 18px; }
+
+/* Worlds list (inside the overlay card) */
+.worlds-list {
+  list-style: none;
+  margin: 18px 0 0;
+  padding: 0;
+  max-height: 50vh;
+  overflow-y: auto;
+  border-radius: 10px;
+  border: 1px solid rgba(232, 214, 168, 0.10);
+}
+.worlds-list:empty { display: none; }
+
+.world-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(232, 214, 168, 0.06);
+  cursor: pointer;
+  transition: background 0.12s ease;
+  text-align: left;
+}
+.world-item:last-child { border-bottom: none; }
+.world-item:hover { background: rgba(232, 214, 168, 0.08); }
+.world-item.current {
+  background: rgba(232, 214, 168, 0.12);
+  box-shadow: inset 2px 0 0 #e8d6a8;
+}
+
+.world-info { flex: 1; min-width: 0; }
+.world-name {
+  display: block;
+  font-size: 14px;
+  color: #e8d6a8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.world-meta {
+  display: block;
+  font-size: 11px;
+  color: rgba(232, 214, 168, 0.50);
+  margin-top: 2px;
+}
+.world-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 10px;
+  border-radius: 4px;
+  background: rgba(232, 214, 168, 0.10);
+  color: rgba(232, 214, 168, 0.75);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.world-delete {
+  background: transparent;
+  color: rgba(232, 214, 168, 0.55);
+  padding: 4px 10px;
+  font-size: 16px;
+  border-radius: 6px;
+  font-weight: 400;
+}
+.world-delete:hover { background: rgba(220, 100, 100, 0.18); color: #ff9a9a; }
+
+.actions { margin: 18px 0 6px; }
+button {
+  background: #e8d6a8;
+  color: #0b0d10;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.08s ease, background 0.12s ease;
+}
+button:hover { background: #f0deb4; }
+button:active { transform: scale(0.98); }
+
+code, kbd {
+  background: rgba(232, 214, 168, 0.08);
+  border: 1px solid rgba(232, 214, 168, 0.15);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.92em;
+}
+
+/* Drag-and-drop overlay (briefly shown on dragenter) */
+.drop-overlay {
+  position: fixed; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(232, 214, 168, 0.12);
+  border: 2px dashed rgba(232, 214, 168, 0.55);
+  pointer-events: none;
+  z-index: 20;
+  font-size: 22px;
+  color: #fff;
+}
+.drop-overlay.hidden { display: none; }
+
+/* HUD (top-left status) */
+.hud {
+  position: fixed;
+  top: 12px; left: 14px;
+  z-index: 5;
+  font-size: 13px;
+  color: rgba(232, 214, 168, 0.62);
+  pointer-events: none;
+  user-select: none;
+}
+.hud-name { font-weight: 600; color: rgba(232, 214, 168, 0.85); }
+.hud-status { margin-left: 10px; }
+
+/* Update toast */
+.toast {
+  position: fixed;
+  bottom: 16px; left: 50%;
+  transform: translateX(-50%);
+  background: rgba(20, 22, 26, 0.96);
+  border: 1px solid rgba(232, 214, 168, 0.2);
+  border-radius: 10px;
+  padding: 10px 14px;
+  display: flex; align-items: center; gap: 12px;
+  z-index: 30;
+  font-size: 14px;
+}
+.toast.hidden { display: none; }
+.toast button { padding: 6px 12px; font-size: 13px; }
