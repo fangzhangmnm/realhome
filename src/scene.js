@@ -45,9 +45,21 @@ export function createScene(canvas) {
   cube.name = "__placeholderCube";
   scene.add(cube);
 
+  // Player rig: the locomotion anchor (feet on floor). Camera is a child of it,
+  // offset upward by PLAYER_HEIGHT for flat-mode head pose. In XR, the headset
+  // pose overrides camera.position; the rig still provides locomotion offset
+  // and snap-turn rotation.
+  const playerRig = new THREE.Group();
+  playerRig.name = "playerRig";
+  scene.add(playerRig);
+
   const camera = new THREE.PerspectiveCamera(FOV_DEG, window.innerWidth / window.innerHeight, NEAR, FAR);
+  // Local to rig. In flat mode this is the camera world pose; in XR the headset
+  // overrides this each frame. Z=3 keeps the desktop spawn 3m back from origin
+  // so authoring a world with content centered at origin is visible without the
+  // player needing to first walk backward to see anything.
   camera.position.set(0, PLAYER_HEIGHT, 3);
-  camera.lookAt(0, PLAYER_HEIGHT, 0);
+  playerRig.add(camera);
 
   const worldRoot = new THREE.Group();
   worldRoot.name = "worldRoot";
@@ -77,7 +89,7 @@ export function createScene(canvas) {
     worldRoot.add(group);
   }
 
-  return { renderer, scene, camera, worldRoot, setWorld };
+  return { renderer, scene, camera, playerRig, worldRoot, setWorld };
 }
 
 function disposeChildren(group) {

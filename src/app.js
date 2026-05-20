@@ -1,34 +1,22 @@
 import * as THREE from "three";
 import { createScene } from "./scene.js";
+import { createPlayer } from "./player.js";
 import { createFlatControls } from "./controls.js";
+import { createXrControls } from "./xrControls.js";
 import { loadGlbFromFile, loadGlbFromBlob } from "./worldLoader.js";
 import {
   addWorld, getWorld, listWorlds, touchWorld, deleteWorld,
   findByRemoteId, updateRemoteSync, requestPersist,
+  getTombstones, addTombstone, migrateLegacyTombstones,
 } from "./worldStore.js";
 
 const DEFAULT_WORLD_URL = "./worlds/RealHomeDefaultWorld.glb";
-const TOMBSTONE_KEY = "realhome.tombstones";
 
 // Detected at boot: is this user agent capable of immersive-vr sessions?
 // Resolves async — by the time the user clicks a world card on Quest, set.
 let xrSupported = false;
 if (navigator.xr) {
   navigator.xr.isSessionSupported("immersive-vr").then((v) => { xrSupported = v; }).catch(() => {});
-}
-
-// Tombstones: remoteIds the user has explicitly deleted. Sync skips these so
-// a deleted bundled / onedrive world doesn't auto-resurrect.
-function getTombstones() {
-  try { return JSON.parse(localStorage.getItem(TOMBSTONE_KEY) || "[]"); }
-  catch { return []; }
-}
-function addTombstone(remoteId) {
-  const t = getTombstones();
-  if (!t.includes(remoteId)) {
-    t.push(remoteId);
-    localStorage.setItem(TOMBSTONE_KEY, JSON.stringify(t));
-  }
 }
 
 // DOM
@@ -43,8 +31,10 @@ const hudStatus = document.getElementById("hudStatus");
 const updateToast = document.getElementById("updateToast");
 const updateReload = document.getElementById("updateReload");
 
-const { renderer, scene, camera, setWorld } = createScene(canvas);
-const flat = createFlatControls(camera, canvas);
+const { renderer, scene, camera, playerRig, setWorld } = createScene(canvas);
+const player = createPlayer(playerRig, camera);
+const flat = createFlatControls(camera, player, canvas);
+const xr = createXrControls(renderer, player);
 
 // Currently loaded world. id is null until something's loaded.
 const current = { id: null, root: null, skyboxes: [], colliders: [] };
@@ -125,7 +115,7 @@ async function handleDelete(id) {
   // Bundled / onedrive worlds carry a remoteId we have to tombstone, otherwise
   // the next sync will resurrect them.
   if (record?.remoteId && (record.source === "bundled" || record.source === "onedrive")) {
-    addTombstone(record.remoteId);
+    await addTombstone(record.remoteId);
   }
   await deleteWorld(id);
   await renderWorldsList();
@@ -180,9 +170,9 @@ function installWorld(result, name) {
   current.skyboxes = result.skyboxes;
   current.colliders = result.colliders;
   setWorld(result.root);
-  // Different worlds have different scales / spawn points — reset player to origin
-  // with zero velocity so a new world doesn't inherit the previous's exit pose.
-  flat.reset();
+  // Reset player to spawn (origin, 0 velocity, identity rotation). Otherwise the
+  // new world inherits the previous's exit pose / accumulated snap-turn angle.
+  player.reset();
   hudName.textContent = name;
   const note = [];
   if (result.skyboxes.length) note.push(`skybox×${result.skyboxes.length}`);
@@ -199,7 +189,8 @@ function setStatus(s) { hudStatus.textContent = s; }
 // Offline / fetch failure: silent, existing record (if any) stays.
 // Tombstoned remoteIds skip entirely — user deleted them, don't resurrect.
 async function syncBundledWorld(url, name) {
-  if (getTombstones().includes(url)) return;
+  const tombs = await getTombstones();
+  if (tombs.includes(url)) return;
   const existing = await findByRemoteId("bundled", url);
 
   const headers = {};
@@ -236,6 +227,7 @@ async function syncBundledWorld(url, name) {
 
 // --- Boot ---
 async function bootstrap() {
+  await migrateLegacyTombstones();          // one-shot from previous localStorage build
   await syncBundledWorld(DEFAULT_WORLD_URL, "RealHome Default");
   await renderWorldsList();
   const worlds = await listWorlds();
@@ -307,9 +299,8 @@ function formatRelativeTime(ts) {
 const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {
   const dt = Math.min(0.05, clock.getDelta());
-  // In XR, headset pose drives the camera; flat WASD/mouse-look would fight it.
-  // Controller-based locomotion comes in a later iteration.
-  if (!renderer.xr.isPresenting) flat.update(dt);
+  if (renderer.xr.isPresenting) xr.update(dt);
+  else flat.update(dt);
   renderer.render(scene, camera);
 });
 

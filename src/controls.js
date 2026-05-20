@@ -1,12 +1,11 @@
-import * as THREE from "three";
 import { PointerLockControls } from "three/addons/controls/PointerLockControls.js";
-import { WALK_SPEED, JUMP_VELOCITY, GRAVITY, GRAVITY_HELD, TERMINAL_VELOCITY, PLAYER_HEIGHT } from "./config.js";
 
-// Flat-mode movement: mouse-look + WASD + space jump.
-// No collision yet — that comes when we wire three-mesh-bvh against `_collider` meshes.
-// Until then, jump uses a simple Y=0 ground; horizontal is free flight on the XZ plane.
+// Flat-mode (desktop) input. Mouse-look via PointerLockControls; movement
+// from WASD + Space + a connected PC gamepad (standard mapping, e.g. Xbox).
+// All movement / jump / snap-turn calls go through the shared `player` object
+// so behaviour matches XR.
 
-export function createFlatControls(camera, domElement) {
+export function createFlatControls(camera, player, domElement) {
   const controls = new PointerLockControls(camera, domElement);
 
   const keys = { w: false, a: false, s: false, d: false, space: false };
@@ -16,72 +15,49 @@ export function createFlatControls(camera, domElement) {
     else if (k === "KeyA") keys.a = down;
     else if (k === "KeyS") keys.s = down;
     else if (k === "KeyD") keys.d = down;
-    else if (k === "Space") keys.space = down;
+    else if (k === "Space") { keys.space = down; if (down) e.preventDefault(); }
     else return;
-    if (down && (k === "Space")) e.preventDefault();
   };
   document.addEventListener("keydown", onKey(true));
   document.addEventListener("keyup", onKey(false));
 
-  let velY = 0;
-  let grounded = true;
-
-  // Reused scratch
-  const forward = new THREE.Vector3();
-  const right = new THREE.Vector3();
-  const move = new THREE.Vector3();
+  // Standard gamepad mapping (Xbox / DualShock / DualSense / Steam / generic):
+  //   axes[0,1] = left stick (X right+, Y down+)   → walk
+  //   axes[2,3] = right stick                       → snap-turn (X) + (Y unused)
+  //   buttons[0] = bottom face button (A / Cross)   → jump
+  function readGamepad() {
+    const pads = navigator.getGamepads?.() || [];
+    for (const p of pads) {
+      if (p && p.mapping === "standard" && p.connected) return p;
+    }
+    return null;
+  }
 
   function update(dt) {
-    // Horizontal movement
-    move.set(0, 0, 0);
-    if (keys.w) move.z -= 1;
-    if (keys.s) move.z += 1;
-    if (keys.a) move.x -= 1;
-    if (keys.d) move.x += 1;
+    // walkZ > 0 = forward (matches player.js sign convention).
+    let walkX = 0, walkZ = 0, jumpHeld = false;
+    if (keys.w) walkZ += 1;
+    if (keys.s) walkZ -= 1;
+    if (keys.a) walkX -= 1;
+    if (keys.d) walkX += 1;
+    if (keys.space) jumpHeld = true;
 
-    if (move.lengthSq() > 0) {
-      move.normalize();
-      // Pull yaw-only forward / right from the camera (ignore pitch so WASD doesn't fly up)
-      camera.getWorldDirection(forward);
-      forward.y = 0; forward.normalize();
-      right.copy(forward).cross(new THREE.Vector3(0, 1, 0)).normalize();
-      const v = new THREE.Vector3()
-        .addScaledVector(forward, -move.z)
-        .addScaledVector(right, move.x)
-        .normalize()
-        .multiplyScalar(WALK_SPEED * dt);
-      camera.position.add(v);
+    const pad = readGamepad();
+    let snapStickX = 0;
+    if (pad) {
+      // Gamepad walk only when keyboard idle — prevents double-counting.
+      if (walkX === 0 && walkZ === 0) {
+        walkX += pad.axes[0] || 0;        // stick right (+1) → strafe right
+        walkZ += -(pad.axes[1] || 0);     // stick up (-1) → walk forward (+walkZ)
+      }
+      snapStickX = pad.axes[2] || 0;      // right stick X — snap-turn
+      if (pad.buttons[0]?.pressed) jumpHeld = true;  // A / Cross button
     }
 
-    // Jump: hold key during ascent = reduced gravity (modeled as "still pushing legs").
-    // Release key OR start falling = real 9.8 gravity. See config.js for derivation.
-    if (keys.space && grounded) {
-      velY = JUMP_VELOCITY;
-      grounded = false;
-    }
-    const isPushingLegs = keys.space && velY > 0;
-    const g = isPushingLegs ? GRAVITY_HELD : GRAVITY;
-    velY -= g * dt;
-    if (velY < -TERMINAL_VELOCITY) velY = -TERMINAL_VELOCITY;
-    camera.position.y += velY * dt;
-
-    if (camera.position.y <= PLAYER_HEIGHT) {
-      camera.position.y = PLAYER_HEIGHT;
-      velY = 0;
-      grounded = true;
-    }
+    player.applyMove(walkX, walkZ, dt);
+    player.applySnapTurn(snapStickX);
+    player.applyJump(jumpHeld, dt);
   }
 
-  // Reset position + look + jump state. Called on world switch so a new world
-  // always starts at spawn (origin), not at wherever the old world's exit pose was.
-  function reset() {
-    camera.position.set(0, PLAYER_HEIGHT, 0);
-    camera.quaternion.set(0, 0, 0, 1);  // identity = looking down -Z, level horizon
-    velY = 0;
-    grounded = true;
-    // Clear inputs so a stuck key from before the switch doesn't carry over.
-    keys.w = keys.a = keys.s = keys.d = keys.space = false;
-  }
-
-  return { controls, update, reset, isLocked: () => controls.isLocked };
+  return { controls, update, isLocked: () => controls.isLocked };
 }

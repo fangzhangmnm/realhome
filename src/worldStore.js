@@ -25,8 +25,9 @@
 // Never drop / rename a store or field destructively.
 
 const DB_NAME = "realhome";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE = "worlds";
+const SETTINGS_STORE = "settings";
 
 let dbPromise = null;
 
@@ -41,7 +42,12 @@ function openDB() {
         const store = db.createObjectStore(STORE, { keyPath: "id" });
         store.createIndex("by_lastVisitedAt", "lastVisitedAt", { unique: false });
       }
-      // future versions: add new stores / new fields here, never destructive
+      if (e.oldVersion < 2) {
+        // Key/value settings (tombstones, future lastWorldId / quota cap / etc.)
+        // Lives in IDB instead of localStorage so a single "clear my data"
+        // (delete the IDB database) wipes everything.
+        db.createObjectStore(SETTINGS_STORE, { keyPath: "key" });
+      }
     };
     req.onsuccess = () => resolve(req.result);
   });
@@ -51,6 +57,11 @@ function openDB() {
 async function tx(mode) {
   const db = await openDB();
   return db.transaction(STORE, mode).objectStore(STORE);
+}
+
+async function txSettings(mode) {
+  const db = await openDB();
+  return db.transaction(SETTINGS_STORE, mode).objectStore(SETTINGS_STORE);
 }
 
 function reqP(req) {
@@ -157,4 +168,53 @@ export async function requestPersist() {
   } catch {
     return false;
   }
+}
+
+// --- Settings (key/value, lives in the same DB) ---
+
+export async function getSetting(key, fallback = null) {
+  try {
+    const store = await txSettings("readonly");
+    const r = await reqP(store.get(key));
+    return r ? r.value : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+export async function setSetting(key, value) {
+  const store = await txSettings("readwrite");
+  await reqP(store.put({ key, value }));
+}
+
+// Tombstones: remoteIds the user has explicitly deleted. Sync skips these so a
+// deleted bundled / onedrive world doesn't auto-resurrect on next boot.
+export async function getTombstones() {
+  const t = await getSetting("tombstones", []);
+  return Array.isArray(t) ? t : [];
+}
+
+export async function addTombstone(remoteId) {
+  const t = await getTombstones();
+  if (!t.includes(remoteId)) {
+    t.push(remoteId);
+    await setSetting("tombstones", t);
+  }
+}
+
+// One-shot migration for users who were on the localStorage tombstones build.
+// Moves any existing entries into IDB and removes the legacy key. Idempotent.
+export async function migrateLegacyTombstones() {
+  const LEGACY_KEY = "realhome.tombstones";
+  const raw = localStorage.getItem(LEGACY_KEY);
+  if (!raw) return;
+  try {
+    const old = JSON.parse(raw);
+    if (Array.isArray(old) && old.length) {
+      const current = await getTombstones();
+      const merged = Array.from(new Set([...current, ...old]));
+      await setSetting("tombstones", merged);
+    }
+  } catch (_) {}
+  localStorage.removeItem(LEGACY_KEY);
 }
