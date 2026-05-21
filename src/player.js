@@ -33,7 +33,10 @@ const _bodyTry = new THREE.Vector3();
 // getCollision returns the current collision system (created from the loaded
 // world's `_collider` meshes), or null. Read fresh each frame so world switches
 // pick up the new colliders without re-instantiating the player.
-export function createPlayer(rig, camera, getCollision = () => null) {
+// onReset is called from inside reset() — used by the app to flag an
+// HMD-pose recenter on the next XR frame so respawns + world switches always
+// bring the user back to virtual origin in VR.
+export function createPlayer(rig, camera, getCollision = () => null, onReset = () => {}) {
   let velY = 0;
   let grounded = true;
   let lastTurnSign = 0;
@@ -154,6 +157,7 @@ export function createPlayer(rig, camera, getCollision = () => null) {
     velY = 0;
     grounded = true;
     lastTurnSign = 0;
+    onReset();
   }
 
   return { applyMove, applySnapTurn, applyJump, updateBodyTracking, reset };

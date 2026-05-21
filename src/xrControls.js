@@ -16,6 +16,17 @@
 // Gravity still applies in XR — call player.applyJump every frame with the
 // current button state.
 
+// Pull the thumbstick axes off an XRInputSource's gamepad. Most controllers
+// report a 4-axis layout where the thumbstick sits at [2],[3]; some older
+// devices put it at [0],[1]. Returns null if no usable axes present.
+function readStick(gp) {
+  if (!gp || !gp.axes) return null;
+  // Pick the axis pair with non-trivial magnitude — handles both layouts.
+  const ax = gp.axes;
+  const a = (Math.abs(ax[2] || 0) + Math.abs(ax[3] || 0)) >= (Math.abs(ax[0] || 0) + Math.abs(ax[1] || 0));
+  return a ? { x: ax[2] || 0, y: ax[3] || 0 } : { x: ax[0] || 0, y: ax[1] || 0 };
+}
+
 export function createXrControls(renderer, player) {
   function update(dt) {
     const session = renderer.xr.getSession();
@@ -23,15 +34,24 @@ export function createXrControls(renderer, player) {
     let walkX = 0, walkZ = 0, snapStickX = 0, jumpHeld = false;
     if (session) {
       for (const src of session.inputSources) {
-        if (!src.gamepad) continue;
-        const axes = src.gamepad.axes;
-        const buttons = src.gamepad.buttons;
-        if (src.handedness === "left") {
-          walkX += axes[2] || 0;            // right (+1) → strafe right
-          walkZ += -(axes[3] || 0);         // up (-1) → walk forward (+walkZ)
-        } else if (src.handedness === "right") {
-          snapStickX = axes[2] || 0;
-          if (buttons[4]?.pressed) jumpHeld = true;  // A/X
+        if (!src.gamepad) continue;     // hand-tracking inputs skipped
+        const gp = src.gamepad;
+        const stick = readStick(gp);
+        const isLeft = src.handedness === "left";
+        const isRight = src.handedness === "right";
+        // Defensive fallback for sources reporting "none" — assume the first
+        // unknown controller is the locomotion stick.
+        const unknown = !isLeft && !isRight;
+        if (isLeft || (unknown && walkX === 0 && walkZ === 0)) {
+          if (stick) {
+            walkX += stick.x;
+            walkZ += -stick.y;          // stick up → forward
+          }
+        }
+        if (isRight || unknown) {
+          if (stick && snapStickX === 0) snapStickX = stick.x;
+          // Jump on A/X (buttons[4]) — fall back to any pressed face button.
+          if (gp.buttons[4]?.pressed || gp.buttons[5]?.pressed) jumpHeld = true;
         }
       }
     }

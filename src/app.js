@@ -37,6 +37,9 @@ const updateToast = document.getElementById("updateToast");
 const updateReload = document.getElementById("updateReload");
 const worldUpdateToast = document.getElementById("worldUpdateToast");
 const worldUpdateText = document.getElementById("worldUpdateText");
+const progressBar = document.getElementById("progressBar");
+const progressFill = document.getElementById("progressFill");
+const progressLabel = document.getElementById("progressLabel");
 
 const { renderer, scene, camera, playerRig, setWorld } = createScene(canvas);
 bindWorldLoaderRenderer(renderer);   // KTX2Loader needs renderer to pick ASTC/BC7
@@ -49,7 +52,19 @@ const current = {
 };
 let loading = false;
 
-const player = createPlayer(playerRig, camera, () => current.collision);
+// Defensive flag: set to true whenever we need the next XR frame to slide the
+// rig so the user's current HMD pose maps to virtual origin. Triggered from
+// session start AND every player.reset() (world switch + fall-too-far respawn).
+let xrNeedsRecenter = false;
+
+const player = createPlayer(
+  playerRig, camera,
+  () => current.collision,
+  // Defensive: every reset (world-switch, respawn-from-fall, ...) flags an
+  // HMD recenter so the user always lands at virtual origin in VR, regardless
+  // of where their playspace pose was when local-floor anchored.
+  () => { if (renderer.xr.isPresenting) xrNeedsRecenter = true; },
+);
 const flat = createFlatControls(camera, player, canvas);
 const xr = createXrControls(renderer, player);
 const vignette = createVignette(camera);
@@ -95,7 +110,16 @@ document.addEventListener("keydown", (e) => {
   tryLock();
 });
 // Match overlay visibility to XR presenting state too.
-renderer.xr.addEventListener("sessionstart", () => overlay.classList.add("hidden"));
+// Recenter on sessionstart — at the very first XR frame camera.position holds
+// the actual HMD pose; we shift the rig to put the user at virtual origin.
+// local-floor doesn't always anchor where the user is standing on Quest
+// (sometimes Guardian center, sometimes boot-time pose), so compensate
+// explicitly. (player.reset() also flips this flag — covers world switches
+// and respawns once we're already in VR.)
+renderer.xr.addEventListener("sessionstart", () => {
+  overlay.classList.add("hidden");
+  xrNeedsRecenter = true;
+});
 renderer.xr.addEventListener("sessionend", () => {
   overlay.classList.remove("hidden");
   checkRemoteUpdates();
@@ -295,6 +319,16 @@ async function streamOpenWorld(source, remoteId, name) {
   }
 }
 
+// Called from the render loop on the first XR frame after a session starts (or
+// after a world switch while in VR). Slides the rig to cancel out wherever
+// the HMD pose currently is, so the user spawns at world origin regardless
+// of where they were physically standing when local-floor was set up.
+function recenterToHead() {
+  playerRig.position.x = -camera.position.x;
+  playerRig.position.z = -camera.position.z;
+  xrNeedsRecenter = false;
+}
+
 function installWorld(result, name) {
   // Tear down the old collision system before the geometry it referenced is
   // disposed by setWorld. We cloned the geometry into the BVH so this is
@@ -319,6 +353,7 @@ function installWorld(result, name) {
 
   // Reset player to spawn (origin, 0 velocity, identity rotation). Otherwise the
   // new world inherits the previous's exit pose / accumulated snap-turn angle.
+  // (reset's onReset hook flips xrNeedsRecenter for us if we're in VR.)
   player.reset();
   hudName.textContent = name;
   const note = [];
@@ -328,6 +363,25 @@ function installWorld(result, name) {
 }
 
 function setStatus(s) { hudStatus.textContent = s; }
+
+// Progress bar — pass fraction in [0, 1] for determinate (download), or -1
+// for indeterminate (optimize). hideProgress() removes the bar.
+function showProgress(label, fraction) {
+  progressLabel.textContent = label;
+  progressBar.classList.remove("hidden");
+  if (fraction < 0) {
+    progressFill.classList.add("indeterminate");
+    progressFill.style.width = "";
+  } else {
+    progressFill.classList.remove("indeterminate");
+    progressFill.style.width = `${Math.max(0, Math.min(1, fraction)) * 100}%`;
+  }
+}
+function hideProgress() {
+  progressBar.classList.add("hidden");
+  progressFill.classList.remove("indeterminate");
+  progressFill.style.width = "0%";
+}
 
 let worldToastTimer = 0;
 function showWorldUpdateToast(name, isCurrent) {
@@ -350,18 +404,23 @@ async function cacheWorld(source, remoteId, name, opts = {}) {
   const p = providers.find((p) => p.source === source);
   if (!p) throw new Error(`no provider for source=${source}`);
   const existing = await findByRemoteId(source, remoteId);
-  if (!quiet) setStatus("caching…");
+  if (!quiet) showProgress(`Downloading ${name}…`, 0);
   let result;
   try {
-    result = await p.fetch(remoteId, existing?.remoteEtag);
+    result = await p.fetch(remoteId, existing?.remoteEtag, (loaded, total) => {
+      if (quiet) return;
+      const f = total > 0 ? loaded / total : -1;
+      const label = total > 0
+        ? `Downloading ${name}… ${formatBytes(loaded)} / ${formatBytes(total)}`
+        : `Downloading ${name}… ${formatBytes(loaded)}`;
+      showProgress(label, f);
+    });
   } catch (err) {
-    if (!quiet) setStatus(`fetch failed: ${err.message || err}`);
+    if (!quiet) { hideProgress(); setStatus(`fetch failed: ${err.message || err}`); }
     return existing || null;
   }
   if (!result) {
-    // 304 / offline / unchanged. If we have a previous record, it's already
-    // optimized (otherwise it wouldn't be in IDB).
-    if (!quiet) setStatus("");
+    if (!quiet) hideProgress();
     return existing;
   }
 
@@ -369,9 +428,10 @@ async function cacheWorld(source, remoteId, name, opts = {}) {
   // persisted, the user sees the error and can retry.
   let finalBlob;
   try {
+    if (!quiet) showProgress(`Optimizing ${name}…`, -1);
     finalBlob = await runOptimizer(result.blob, { quiet });
   } catch (err) {
-    if (!quiet) setStatus(`cache failed: ${err.message || err}`);
+    if (!quiet) { hideProgress(); setStatus(`cache failed: ${err.message || err}`); }
     console.warn("cache failed during optimize:", err);
     return null;
   }
@@ -489,10 +549,20 @@ async function renderWorldsList() {
     const metaSpan = document.createElement("span");
     metaSpan.className = "world-meta";
     if (uncached) {
-      metaSpan.textContent = "Not cached — tap to stream";
+      metaSpan.textContent = "checking size…";
+      const p = providers.find((p) => p.source === w.source);
+      if (p?.getSize) {
+        p.getSize(w.remoteId).then((size) => {
+          metaSpan.textContent = size != null
+            ? `${formatBytes(size)} · not cached — tap to stream / ↓ to keep`
+            : "not cached — tap to stream / ↓ to keep";
+        }).catch(() => {
+          metaSpan.textContent = "not cached — tap to stream / ↓ to keep";
+        });
+      } else {
+        metaSpan.textContent = "not cached — tap to stream / ↓ to keep";
+      }
     } else {
-      // Cached worlds are always optimized (cache + optimize is atomic).
-      // When we add texture-compression options, the hint goes here.
       metaSpan.textContent =
         `${formatBytes(w.byteLength)} · ${formatRelativeTime(w.lastVisitedAt)}`;
     }
@@ -550,6 +620,7 @@ const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {
   const dt = Math.min(0.05, clock.getDelta());
   if (renderer.xr.isPresenting) {
+    if (xrNeedsRecenter) recenterToHead();   // first XR frame; camera.position is now real
     xr.update(dt);
     player.updateBodyTracking(vignette, dt);
   } else {

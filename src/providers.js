@@ -19,13 +19,20 @@ const BUNDLED = [
   { url: "./worlds/RealHomeDefaultWorld.glb", name: "RealHome Default" },
 ];
 
+// In-memory cache of HEAD-request results so opening the menu repeatedly doesn't
+// re-poll the server. Lifetime = page session; cleared on reload.
+const sizeCache = new Map();
+
 function createBundledProvider() {
   return {
     source: "bundled",
     async list() {
       return BUNDLED.map((b) => ({ remoteId: b.url, name: b.name }));
     },
-    async fetch(remoteId, ifNoneMatch) {
+    // onProgress(loaded, total) called every chunk during body download.
+    // `total` is 0 when Content-Length is missing; caller should treat that
+    // as indeterminate.
+    async fetch(remoteId, ifNoneMatch, onProgress) {
       const headers = {};
       if (ifNoneMatch) headers["If-None-Match"] = ifNoneMatch;
       let resp;
@@ -38,8 +45,38 @@ function createBundledProvider() {
       if (!resp.ok) throw new Error(`${remoteId}: ${resp.status}`);
       const etag =
         resp.headers.get("etag") || resp.headers.get("last-modified") || "";
-      const blob = await resp.blob();
+
+      const total = Number(resp.headers.get("content-length")) || 0;
+      const reader = resp.body.getReader();
+      const chunks = [];
+      let received = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        received += value.length;
+        onProgress?.(received, total);
+      }
+      const blob = new Blob(chunks, {
+        type: resp.headers.get("content-type") || "application/octet-stream",
+      });
       return { blob, etag };
+    },
+    // HEAD request for size only — used by the menu to show "X MB · tap to
+    // stream" on uncached entries. Returns null on offline / server error.
+    async getSize(remoteId) {
+      if (sizeCache.has(remoteId)) return sizeCache.get(remoteId);
+      try {
+        const resp = await fetch(remoteId, { method: "HEAD" });
+        if (!resp.ok) { sizeCache.set(remoteId, null); return null; }
+        const n = Number(resp.headers.get("content-length"));
+        const size = Number.isFinite(n) && n > 0 ? n : null;
+        sizeCache.set(remoteId, size);
+        return size;
+      } catch {
+        sizeCache.set(remoteId, null);
+        return null;
+      }
     },
   };
 }
