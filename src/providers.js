@@ -81,5 +81,53 @@ function createBundledProvider() {
   };
 }
 
-// Future: createOneDriveProvider(msalClient) — same interface, Graph backend.
-export const providers = [createBundledProvider()];
+// OneDrive provider. Available only when ONEDRIVE_CLIENT_ID is set AND the
+// user is signed in — list() returns empty otherwise, so the menu just shows
+// nothing from this source. UI's sign-in button drives the actual login.
+function createOneDriveProvider() {
+  // Lazy-import the OneDrive modules so the MSAL bundle isn't loaded until
+  // someone actually clicks sign-in. Keeps the cold-boot import graph small.
+  let modPromise = null;
+  function getMod() {
+    if (!modPromise) modPromise = (async () => ({
+      auth: await import("./onedriveAuth.js"),
+      graph: await import("./onedriveGraph.js"),
+    }))();
+    return modPromise;
+  }
+
+  const sizeCache = new Map();
+
+  return {
+    source: "onedrive",
+    async list() {
+      const { auth, graph } = await getMod();
+      if (!auth.isConfigured()) return [];
+      const account = await auth.getAccount();
+      if (!account) return [];
+      const items = await graph.listAppFolderGlbs();
+      // Stash sizes from list() so getSize() doesn't re-fetch per row.
+      for (const it of items) if (it.size != null) sizeCache.set(it.remoteId, it.size);
+      return items.map((it) => ({ remoteId: it.remoteId, name: it.name }));
+    },
+    async fetch(remoteId, ifNoneMatch, onProgress) {
+      const { graph } = await getMod();
+      return graph.fetchItemContent(remoteId, ifNoneMatch, onProgress);
+    },
+    async getSize(remoteId) {
+      if (sizeCache.has(remoteId)) return sizeCache.get(remoteId);
+      try {
+        const { graph } = await getMod();
+        const meta = await graph.getItemMeta(remoteId);
+        const size = meta?.size ?? null;
+        sizeCache.set(remoteId, size);
+        return size;
+      } catch {
+        sizeCache.set(remoteId, null);
+        return null;
+      }
+    },
+  };
+}
+
+export const providers = [createBundledProvider(), createOneDriveProvider()];

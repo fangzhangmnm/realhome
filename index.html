@@ -17,6 +17,38 @@
     <link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png" />
     <link rel="stylesheet" href="./src/styles.css" />
 
+    <!-- Earliest-possible global error catcher. Runs before the importmap and
+         the module script — if either fails (404, syntax, missing import),
+         the user sees the actual error here instead of a blank page. -->
+    <script>
+      (function () {
+        var banner;
+        function show(msg) {
+          if (!banner) {
+            banner = document.createElement("div");
+            banner.style.cssText =
+              "position:fixed;top:0;left:0;right:0;background:rgba(180,40,40,0.95);" +
+              "color:#fff;padding:10px 14px;font:13px/1.4 ui-monospace,Menlo,monospace;" +
+              "z-index:99999;white-space:pre-wrap;max-height:50vh;overflow:auto;";
+            (document.body || document.documentElement).appendChild(banner);
+          }
+          banner.appendChild(Object.assign(document.createElement("div"), {
+            textContent: msg, style: "margin-top:4px;"
+          }));
+        }
+        window.addEventListener("error", function (e) {
+          var loc = e.filename
+            ? "  " + (e.filename.split("/").pop()) + ":" + e.lineno
+            : "";
+          show("✗ " + (e.message || e.type) + (loc ? "\n" + loc : ""));
+        });
+        window.addEventListener("unhandledrejection", function (e) {
+          var r = e.reason;
+          show("✗ unhandled: " + (r && r.message || r || "unknown"));
+        });
+      })();
+    </script>
+
     <!-- All deps vendored into src/vendor. Truly offline-capable from first visit,
          no CDN dependency, repo-stable across runs. -->
     <script type="importmap">
@@ -27,7 +59,8 @@
           "three-mesh-bvh": "./src/vendor/three-mesh-bvh/build/index.module.js",
           "@gltf-transform/core": "./src/vendor/gltf-transform/core/index.js",
           "@gltf-transform/extensions": "./src/vendor/gltf-transform/extensions/index.js",
-          "@gltf-transform/functions": "./src/vendor/gltf-transform/functions/index.js"
+          "@gltf-transform/functions": "./src/vendor/gltf-transform/functions/index.js",
+          "@azure/msal-browser": "./src/vendor/msal/index.js"
         }
       }
     </script>
@@ -43,10 +76,21 @@
 
         <ul id="worldsList" class="worlds-list" role="list"></ul>
 
+        <!-- Persistent inline error/notice log. Provider failures, auth errors,
+             cache failures appear here so they don't get swept away by the HUD. -->
+        <div id="errorLog" class="error-log hidden" role="log"></div>
+
         <div class="actions">
           <button id="pickButton" type="button">Add a world</button>
           <button id="refreshButton" type="button" class="refresh-button" title="Check sources for updates">↻</button>
           <input type="file" id="fileInput" accept=".glb,.gltf,model/gltf-binary,model/gltf+json" hidden />
+        </div>
+
+        <!-- OneDrive sign-in / sign-out. Hidden until OneDrive provider is wired up. -->
+        <div id="onedriveBar" class="onedrive-bar hidden">
+          <span id="onedriveStatus" class="onedrive-status">Not signed in</span>
+          <button id="onedriveSignIn" type="button" class="onedrive-button">Sign in with Microsoft</button>
+          <button id="onedriveSignOut" type="button" class="onedrive-button hidden">Sign out</button>
         </div>
 
         <p class="muted small">

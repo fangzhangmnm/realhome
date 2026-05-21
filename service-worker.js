@@ -9,7 +9,7 @@
 //
 // Bump CACHE_VERSION when any precache file changes.
 
-const CACHE_VERSION = "v12-2026-05-21";
+const CACHE_VERSION = "v15-2026-05-21";
 const CACHE_NAME = `realhome-${CACHE_VERSION}`;
 
 const PRECACHE_URLS = [
@@ -33,6 +33,8 @@ const PRECACHE_URLS = [
   "./src/collision.js",
   "./src/vignette.js",
   "./src/optimizer.js",
+  "./src/onedriveAuth.js",
+  "./src/onedriveGraph.js",
   // All deps vendored — no CDN runtime dependency. PWA is fully offline once
   // installed. No KTX2 / Draco / Meshopt decoder wasm — we don't ship compressed
   // glb support; artist-side tooling does compression-to-PNG before upload.
@@ -45,6 +47,7 @@ const PRECACHE_URLS = [
   "./src/vendor/gltf-transform/core/index.js",
   "./src/vendor/gltf-transform/extensions/index.js",
   "./src/vendor/gltf-transform/functions/index.js",
+  "./src/vendor/msal/index.js",
 ];
 
 // Files SW does NOT intercept — let the app's own sync logic handle freshness

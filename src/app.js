@@ -14,6 +14,7 @@ import {
   clearAllWorlds, clearAllSettings,
 } from "./worldStore.js";
 import { providers } from "./providers.js";
+import { isOneDriveConfigured } from "./config.js";
 
 // Detected at boot: is this user agent capable of immersive-vr sessions?
 // Resolves async — by the time the user clicks a world card on Quest, set.
@@ -40,6 +41,11 @@ const worldUpdateText = document.getElementById("worldUpdateText");
 const progressBar = document.getElementById("progressBar");
 const progressFill = document.getElementById("progressFill");
 const progressLabel = document.getElementById("progressLabel");
+const errorLog = document.getElementById("errorLog");
+const onedriveBar = document.getElementById("onedriveBar");
+const onedriveStatus = document.getElementById("onedriveStatus");
+const onedriveSignIn = document.getElementById("onedriveSignIn");
+const onedriveSignOut = document.getElementById("onedriveSignOut");
 
 const { renderer, scene, camera, playerRig, setWorld } = createScene(canvas);
 bindWorldLoaderRenderer(renderer);   // KTX2Loader needs renderer to pick ASTC/BC7
@@ -159,6 +165,8 @@ worldsListEl.addEventListener("click", async (e) => {
     await handleCache(cacheBtn.dataset.source, cacheBtn.dataset.remoteId, cacheBtn.dataset.worldName);
     return;
   }
+  const deleteRemoteBtn = e.target.closest(".world-delete-remote");
+  if (deleteRemoteBtn) { await handleDeleteRemote(deleteRemoteBtn.dataset.id); return; }
   const deleteBtn = e.target.closest(".world-delete");
   if (deleteBtn) { await handleDelete(deleteBtn.dataset.id); return; }
   const item = e.target.closest(".world-item");
@@ -210,7 +218,47 @@ async function handleDelete(id) {
   await renderWorldsList();
 }
 
+// "Delete from OneDrive too" — for cached worlds with source="onedrive".
+// Removes the remote item via Graph + the local IDB record. Permanent;
+// scarier confirm dialog. Other devices' cached copies are unaffected at
+// the time of deletion, but their next background sync will see the file
+// is gone (the local record stays; user can × it manually).
+async function handleDeleteRemote(id) {
+  if (id === current.id) return;
+  const record = await getWorld(id);
+  if (!record || record.source !== "onedrive" || !record.remoteId) return;
+  const ok = confirm(
+    `Delete "${record.name}" from OneDrive?\n\n` +
+    `This removes the file from your OneDrive RealHome folder permanently. ` +
+    `Other devices that still have it cached will keep their local copy ` +
+    `until they refresh.\n\n` +
+    `This can't be undone.`
+  );
+  if (!ok) return;
+  try {
+    const { deleteAppFolderItem } = await import("./onedriveGraph.js");
+    await deleteAppFolderItem(record.remoteId);
+  } catch (err) {
+    logError(`delete-remote:${record.remoteId}`, `OneDrive delete: ${err.message || err}`);
+    return;   // leave IDB record intact so the user can retry
+  }
+  await deleteWorld(id);
+  await renderWorldsList();
+}
+
 // --- World loading paths ---
+//
+// loadFile is the local-side ingest path (file picker + drag/drop). After
+// optimize, if the user is signed in to OneDrive we attempt to upload the
+// blob to the AppFolder so it auto-syncs across devices:
+//   - filename collides in AppFolder → confirm overwrite. Cancel = save as
+//     local-only, no upload (file is still usable on THIS device).
+//   - upload fails for any other reason → save as local-only, surface the
+//     error in the log. Don't block the user from playing the world.
+//
+// Outcome:
+//   - success path → IDB record has source="onedrive" + remoteId + remoteEtag
+//   - cancel or upload failure → IDB record has source="local", no remote
 async function loadFile(file) {
   if (loading) return;
   if (!/\.(glb|gltf)$/i.test(file.name)) { setStatus("not a .glb/.gltf"); return; }
@@ -221,21 +269,91 @@ async function loadFile(file) {
     // raw record in IDB. (Optimizer also validates the glb in the process.)
     const finalBlob = await runOptimizer(file);
     const result = await loadGlbFromBlob(finalBlob, file.name);
-    const record = await addWorld(finalBlob, file.name, {
-      source: "local",
-      optimized: true,
-    });
+
+    // OneDrive sync (best effort). Falls back to local-only on any failure
+    // or user cancel; in both cases the world is fully usable from IDB.
+    const onedriveResult = await maybeUploadToOneDrive(file.name, finalBlob);
+
+    const record = await addWorld(finalBlob, file.name, onedriveResult
+      ? {
+          source: "onedrive",
+          remoteId: onedriveResult.remoteId,
+          remoteEtag: onedriveResult.etag,
+          optimized: true,
+        }
+      : { source: "local", optimized: true }
+    );
     current.id = record.id;
-    current.source = "local";
-    current.remoteId = null;
+    current.source = record.source;
+    current.remoteId = record.remoteId;
     installWorld(result, file.name);
-    setStatus("");
+    setStatus(onedriveResult ? "synced to OneDrive" : "");
     await renderWorldsList();
   } catch (err) {
     console.error(err);
-    setStatus("upload failed: " + (err.message || err));
+    setStatus("upload failed");
+    logError(`upload:${file.name}`, `upload failed: ${err.message || err}`);
   } finally {
     loading = false;
+  }
+}
+
+// Returns the upload result on success, or null if the user isn't signed
+// in, cancelled an overwrite prompt, or the upload failed. Failures (vs
+// cancel) are logged so the user knows why their file didn't sync — but
+// it's never fatal to the loadFile flow.
+async function maybeUploadToOneDrive(filename, blob) {
+  if (!isOneDriveConfigured()) return null;
+  let auth, graph, account;
+  try {
+    auth = await import("./onedriveAuth.js");
+    graph = await import("./onedriveGraph.js");
+    account = await auth.getAccount();
+  } catch (err) {
+    console.warn("OneDrive modules unavailable, skipping upload:", err);
+    return null;
+  }
+  if (!account) return null;       // not signed in — silent fall-through
+
+  // Pre-check for filename collision so we can ask the user before any
+  // bytes go up the wire. Chunked uploads in particular are bad at
+  // surfacing late conflicts.
+  let existing = null;
+  try {
+    existing = await graph.getAppFolderItemByName(filename);
+  } catch (err) {
+    logError(`upload:${filename}`, `OneDrive precheck: ${err.message || err}`);
+    return null;
+  }
+  let overwrite = false;
+  if (existing) {
+    const ok = confirm(
+      `"${filename}" already exists in your OneDrive RealHome folder.\n\n` +
+      `Overwrite it?\n\n` +
+      `Cancel keeps the file local-only on this device.`
+    );
+    if (!ok) return null;
+    overwrite = true;
+  }
+
+  showProgress(`Uploading ${filename} to OneDrive…`, 0);
+  try {
+    const result = await graph.uploadItemToAppFolder(filename, blob, {
+      overwrite,
+      onProgress: (loaded, total) => {
+        const f = total > 0 ? loaded / total : -1;
+        const label = total > 0
+          ? `Uploading ${filename}… ${formatBytes(loaded)} / ${formatBytes(total)}`
+          : `Uploading ${filename}… ${formatBytes(loaded)}`;
+        showProgress(label, f);
+      },
+    });
+    hideProgress();
+    return result;
+  } catch (err) {
+    hideProgress();
+    logError(`upload:${filename}`, `OneDrive upload: ${err.message || err}`);
+    return null;
   }
 }
 
@@ -269,7 +387,8 @@ async function switchToWorld(id) {
     await renderWorldsList();
   } catch (err) {
     console.error(err);
-    setStatus("load failed: " + (err.message || err));
+    setStatus("load failed");
+    logError(`load:${id}`, `load failed: ${err.message || err}`);
   } finally {
     loading = false;
   }
@@ -297,7 +416,8 @@ async function streamOpenWorld(source, remoteId, name) {
     await renderWorldsList();
   } catch (err) {
     console.error(err);
-    setStatus("load failed: " + (err.message || err));
+    setStatus("load failed");
+    logError(`stream:${source}:${remoteId}`, `${name}: ${err.message || err}`);
   } finally {
     loading = false;
   }
@@ -337,6 +457,57 @@ function installWorld(result, name) {
 }
 
 function setStatus(s) { hudStatus.textContent = s; }
+
+// Persistent error log shown inline in the menu. setStatus() is ephemeral
+// (overwritten by next op); logError() entries stay until the user dismisses.
+// Key is used to dedup repeated errors (e.g. provider list failing every
+// menu open) — passing the same key just refreshes the timestamp.
+const errorEntries = new Map();   // key → { time, msg, node }
+function logError(key, msg) {
+  console.warn(`[${key}]`, msg);
+  const now = new Date();
+  const timeStr = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  let entry = errorEntries.get(key);
+  if (entry) {
+    entry.node.querySelector(".error-time").textContent = timeStr;
+    entry.node.querySelector(".error-text").textContent = msg;
+    entry.time = now;
+    entry.msg = msg;
+  } else {
+    const node = document.createElement("div");
+    node.className = "error-entry";
+    const t = document.createElement("span");
+    t.className = "error-time";
+    t.textContent = timeStr;
+    const text = document.createElement("span");
+    text.className = "error-text";
+    text.style.flex = "1";
+    text.textContent = msg;
+    const x = document.createElement("button");
+    x.className = "error-dismiss";
+    x.type = "button";
+    x.textContent = "×";
+    x.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      node.remove();
+      errorEntries.delete(key);
+      if (errorEntries.size === 0) errorLog.classList.add("hidden");
+    });
+    node.appendChild(t);
+    node.appendChild(text);
+    node.appendChild(x);
+    errorLog.appendChild(node);
+    errorEntries.set(key, { time: now, msg, node });
+  }
+  errorLog.classList.remove("hidden");
+}
+function clearError(key) {
+  const entry = errorEntries.get(key);
+  if (!entry) return;
+  entry.node.remove();
+  errorEntries.delete(key);
+  if (errorEntries.size === 0) errorLog.classList.add("hidden");
+}
 
 // Progress bar — pass fraction in [0, 1] for determinate (download), or -1
 // for indeterminate (optimize). hideProgress() removes the bar.
@@ -390,7 +561,11 @@ async function cacheWorld(source, remoteId, name, opts = {}) {
       showProgress(label, f);
     });
   } catch (err) {
-    if (!quiet) { hideProgress(); setStatus(`fetch failed: ${err.message || err}`); }
+    if (!quiet) {
+      hideProgress();
+      setStatus("fetch failed");
+      logError(`cache:${source}:${remoteId}`, `fetch ${name}: ${err.message || err}`);
+    }
     return existing || null;
   }
   if (!result) {
@@ -405,7 +580,11 @@ async function cacheWorld(source, remoteId, name, opts = {}) {
     if (!quiet) showProgress(`Optimizing ${name}…`, -1);
     finalBlob = await runOptimizer(result.blob, { quiet });
   } catch (err) {
-    if (!quiet) { hideProgress(); setStatus(`cache failed: ${err.message || err}`); }
+    if (!quiet) {
+      hideProgress();
+      setStatus("cache failed");
+      logError(`cache:${source}:${remoteId}`, `optimize ${name}: ${err.message || err}`);
+    }
     console.warn("cache failed during optimize:", err);
     return null;
   }
@@ -450,122 +629,255 @@ async function checkRemoteUpdates() {
 }
 
 
+// --- OneDrive sign-in UI ---
+// Wires the sign-in / sign-out buttons. Sign-in is interactive (loginRedirect
+// reloads the page). On boot we drain MSAL's redirect state and refresh the
+// status row.
+async function refreshOneDriveStatus() {
+  if (!isOneDriveConfigured()) {
+    onedriveBar.classList.add("hidden");
+    return;
+  }
+  onedriveBar.classList.remove("hidden");
+  try {
+    const { getAccount } = await import("./onedriveAuth.js");
+    const account = await getAccount();
+    if (account) {
+      onedriveStatus.textContent = `Signed in: ${account.username}`;
+      onedriveSignIn.classList.add("hidden");
+      onedriveSignOut.classList.remove("hidden");
+    } else {
+      onedriveStatus.textContent = "Not signed in";
+      onedriveSignIn.classList.remove("hidden");
+      onedriveSignOut.classList.add("hidden");
+    }
+  } catch (err) {
+    // MSAL bundle failed to load, init threw, etc. Leave the bar in its
+    // default "Not signed in" state — the user can still click sign-in to
+    // retry, and everything else (bundled / cached worlds) keeps working.
+    // No errorLog: this fires on every boot when offline; would be noise.
+    console.warn("OneDrive status refresh failed:", err);
+  }
+}
+onedriveSignIn.addEventListener("click", async (e) => {
+  e.stopPropagation();
+  try {
+    const { signIn } = await import("./onedriveAuth.js");
+    await signIn();   // navigates away — code below doesn't run
+  } catch (err) {
+    logError("onedrive:signin", `sign-in failed: ${err.message || err}`);
+  }
+});
+onedriveSignOut.addEventListener("click", async (e) => {
+  e.stopPropagation();
+  try {
+    const { signOut } = await import("./onedriveAuth.js");
+    await signOut();   // local cache clear only — no navigation
+    await refreshOneDriveStatus();
+    await renderWorldsList();   // re-render so OneDrive entries drop out
+  } catch (err) {
+    logError("onedrive:signout", `sign-out failed: ${err.message || err}`);
+  }
+});
+
 // --- Boot ---
 // Menu-first: don't auto-load any world. Entering a world (cached or
 // available) always requires the user to tap it — which they have to do
 // anyway because WebXR session entry / pointer-lock both need a user gesture.
-// Pre-loading the previous world just to render it behind the menu wastes a
-// parse and gives the wrong impression that we'll auto-enter on Quest.
 //
-// Background cache invalidation still fires (silently) so the list shows
-// fresh upstream changes for cached bundled / onedrive worlds.
+// Render order:
+//   1. (sync) Show OneDrive sign-in bar in default state so the button is
+//      visible on first paint — DO NOT await MSAL init here.
+//   2. Render cached worlds list (no provider calls yet).
+//   3. (async, background) Drain MSAL redirect + probe. If signed in, swap
+//      bar to "Signed in: ..." and re-render to show OneDrive entries.
+//
+// MSAL.initialize() + handleRedirectPromise() + silent token probe can take
+// several seconds (especially when the silent-renew iframe lands on a
+// chrome-error page during a redirect URI mismatch — see docs). Blocking
+// the menu paint on this == "user sees no Sign in button for many seconds."
 async function bootstrap() {
   await migrateLegacyTombstones();          // one-shot from previous localStorage build
+
+  // Show the OneDrive bar synchronously with the default "Not signed in"
+  // state. If MSAL later discovers a cached account, refreshOneDriveStatus()
+  // swaps the text + button visibility.
+  if (isOneDriveConfigured()) {
+    onedriveBar.classList.remove("hidden");
+    onedriveStatus.textContent = "Not signed in";
+    onedriveSignIn.classList.remove("hidden");
+    onedriveSignOut.classList.add("hidden");
+  }
+
   await renderWorldsList();
   checkRemoteUpdates();
+
+  // Kick off MSAL init in the background. When it resolves:
+  //   - refresh the sign-in bar (might find a cached signed-in account)
+  //   - re-render worlds list (OneDrive provider now returns real entries)
+  //
+  // Failures here are silent (console only). MSAL flaking — offline, third-
+  // party cookies blocked, Microsoft outage — must not surface as a red
+  // banner. Bundled + local + cached-onedrive worlds remain fully usable.
+  if (isOneDriveConfigured()) {
+    (async () => {
+      try {
+        const { getPCA } = await import("./onedriveAuth.js");
+        await getPCA();
+        await refreshOneDriveStatus();
+        await renderWorldsList();
+      } catch (err) {
+        console.warn("OneDrive boot failed (offline?):", err);
+      }
+    })();
+  }
 }
 
+// Render token: every renderWorldsList increments this and captures it. Any
+// async append inside the same render checks the token against the current
+// value and bails if a newer render has started — protects against:
+//   (a) two concurrent renderWorldsList() calls racing on innerHTML
+//   (b) a long-running provider.list() append landing in a stale DOM
+let renderToken = 0;
+
 async function renderWorldsList() {
+  const token = ++renderToken;
   const cached = await listWorlds();                            // sorted by lastVisitedAt
+  if (token !== renderToken) return;
   const cachedKey = new Set();
   for (const w of cached) if (w.remoteId) cachedKey.add(`${w.source}:${w.remoteId}`);
 
-  // Pull "available but not cached" from each provider — these show as a
-  // "Tap to cache" entry in the menu.
-  const available = [];
-  for (const p of providers) {
-    try {
-      const items = await p.list();
-      for (const it of items) {
-        if (!cachedKey.has(`${p.source}:${it.remoteId}`)) {
-          available.push({
-            kind: "uncached",
-            source: p.source,
-            remoteId: it.remoteId,
-            name: it.name,
-          });
-        }
-      }
-    } catch (err) {
-      console.warn(`provider ${p.source} list failed:`, err.message || err);
-    }
-  }
-
+  // Step 1: paint cached worlds immediately. Provider availability lookups
+  // happen asynchronously below (one might be a slow Graph round-trip).
   worldsListEl.innerHTML = "";
-  for (const w of [...cached, ...available]) {
-    const uncached = w.kind === "uncached";
-    const isCurrent =
-      (w.id && w.id === current.id) ||
-      (w.remoteId && w.source === current.source && w.remoteId === current.remoteId);
-    const li = document.createElement("li");
-    li.className =
-      "world-item" + (isCurrent ? " current" : "") + (uncached ? " uncached" : "");
-    if (w.id) li.dataset.id = w.id;
-    else {
-      li.dataset.source = w.source;
-      li.dataset.remoteId = w.remoteId;
-      li.dataset.worldName = w.name;
-    }
+  for (const w of cached) appendWorldRow(w, false, token);
 
-    const info = document.createElement("div");
-    info.className = "world-info";
-    const nameSpan = document.createElement("span");
-    nameSpan.className = "world-name";
-    nameSpan.textContent = w.name;
-    if (w.source === "bundled") {
-      const badge = document.createElement("span");
-      badge.className = "world-badge";
-      badge.textContent = "default";
-      nameSpan.appendChild(badge);
-    }
-    info.appendChild(nameSpan);
-
-    const metaSpan = document.createElement("span");
-    metaSpan.className = "world-meta";
-    if (uncached) {
-      metaSpan.textContent = "checking size…";
-      const p = providers.find((p) => p.source === w.source);
-      if (p?.getSize) {
-        p.getSize(w.remoteId).then((size) => {
-          metaSpan.textContent = size != null
-            ? `${formatBytes(size)} · not cached — tap to stream / ↓ to keep`
-            : "not cached — tap to stream / ↓ to keep";
-        }).catch(() => {
-          metaSpan.textContent = "not cached — tap to stream / ↓ to keep";
-        });
-      } else {
-        metaSpan.textContent = "not cached — tap to stream / ↓ to keep";
+  // Step 2: per-provider, fetch the available list and append uncached entries
+  // as each provider resolves. Errors surface in the inline error log, not
+  // console-only. Each provider gets its own try/catch — one provider's
+  // failure doesn't block the others.
+  for (const p of providers) {
+    (async () => {
+      let items;
+      try {
+        items = await p.list();
+        clearError(`provider:${p.source}:list`);
+      } catch (err) {
+        logError(`provider:${p.source}:list`, `${p.source}: ${err.message || err}`);
+        return;
       }
-    } else {
-      metaSpan.textContent =
-        `${formatBytes(w.byteLength)} · ${formatRelativeTime(w.lastVisitedAt)}`;
-    }
-    info.appendChild(metaSpan);
-    li.appendChild(info);
-
-    // Right-side action button: ↓ for uncached (download to cache), × for
-    // cached non-current (uncache / delete). Current world has no button.
-    if (uncached) {
-      const dl = document.createElement("button");
-      dl.className = "world-cache";
-      dl.type = "button";
-      dl.dataset.source = w.source;
-      dl.dataset.remoteId = w.remoteId;
-      dl.dataset.worldName = w.name;
-      dl.title = "Download for offline";
-      dl.textContent = "↓";
-      li.appendChild(dl);
-    } else if (w.id && !isCurrent) {
-      const del = document.createElement("button");
-      del.className = "world-delete";
-      del.type = "button";
-      del.dataset.id = w.id;
-      del.title = w.source === "local" ? "Delete world" : "Remove from cache";
-      del.textContent = "×";
-      li.appendChild(del);
-    }
-    worldsListEl.appendChild(li);
+      if (token !== renderToken) return;
+      for (const it of items) {
+        if (cachedKey.has(`${p.source}:${it.remoteId}`)) continue;
+        appendWorldRow({
+          kind: "uncached",
+          source: p.source,
+          remoteId: it.remoteId,
+          name: it.name,
+        }, true, token);
+      }
+    })();
   }
+}
+
+function appendWorldRow(w, uncached, token) {
+  if (token !== renderToken) return;
+  const isCurrent =
+    (w.id && w.id === current.id) ||
+    (w.remoteId && w.source === current.source && w.remoteId === current.remoteId);
+  const li = document.createElement("li");
+  li.className =
+    "world-item" + (isCurrent ? " current" : "") + (uncached ? " uncached" : "");
+  if (w.id) li.dataset.id = w.id;
+  else {
+    li.dataset.source = w.source;
+    li.dataset.remoteId = w.remoteId;
+    li.dataset.worldName = w.name;
+  }
+
+  const info = document.createElement("div");
+  info.className = "world-info";
+  const nameSpan = document.createElement("span");
+  nameSpan.className = "world-name";
+  nameSpan.textContent = w.name;
+  if (w.source === "bundled") {
+    const badge = document.createElement("span");
+    badge.className = "world-badge";
+    badge.textContent = "default";
+    nameSpan.appendChild(badge);
+  } else if (w.source === "onedrive") {
+    const badge = document.createElement("span");
+    badge.className = "world-badge";
+    badge.textContent = "onedrive";
+    nameSpan.appendChild(badge);
+  }
+  info.appendChild(nameSpan);
+
+  const metaSpan = document.createElement("span");
+  metaSpan.className = "world-meta";
+  if (uncached) {
+    metaSpan.textContent = "checking size…";
+    const p = providers.find((p) => p.source === w.source);
+    if (p?.getSize) {
+      p.getSize(w.remoteId).then((size) => {
+        if (token !== renderToken) return;
+        metaSpan.textContent = size != null
+          ? `${formatBytes(size)} · not cached — tap to stream / ↓ to keep`
+          : "not cached — tap to stream / ↓ to keep";
+      }).catch(() => {
+        if (token !== renderToken) return;
+        metaSpan.textContent = "not cached — tap to stream / ↓ to keep";
+      });
+    } else {
+      metaSpan.textContent = "not cached — tap to stream / ↓ to keep";
+    }
+  } else {
+    metaSpan.textContent =
+      `${formatBytes(w.byteLength)} · ${formatRelativeTime(w.lastVisitedAt)}`;
+  }
+  info.appendChild(metaSpan);
+  li.appendChild(info);
+
+  // Right-side action buttons. Buttons per source:
+  //   uncached         → ↓ (download to cache)
+  //   cached local     → × (delete permanently — no remote to recover from)
+  //   cached bundled   → × (remove from cache, bundled source can be re-fetched)
+  //   cached onedrive  → × (uncache) + 🗑 (delete from OneDrive too)
+  //   current          → none (can't act on the world you're inside)
+  if (uncached) {
+    const dl = document.createElement("button");
+    dl.className = "world-cache";
+    dl.type = "button";
+    dl.dataset.source = w.source;
+    dl.dataset.remoteId = w.remoteId;
+    dl.dataset.worldName = w.name;
+    dl.title = "Download for offline";
+    dl.textContent = "↓";
+    li.appendChild(dl);
+  } else if (w.id && !isCurrent) {
+    const del = document.createElement("button");
+    del.className = "world-delete";
+    del.type = "button";
+    del.dataset.id = w.id;
+    del.title = w.source === "local" ? "Delete world" : "Remove from cache";
+    del.textContent = "×";
+    li.appendChild(del);
+
+    // OneDrive worlds get a second button for full remote delete. We don't
+    // collapse uncache+delete into one button because they have different
+    // blast radius — losing the local copy is recoverable from OneDrive,
+    // losing OneDrive is permanent.
+    if (w.source === "onedrive") {
+      const delRemote = document.createElement("button");
+      delRemote.className = "world-delete-remote";
+      delRemote.type = "button";
+      delRemote.dataset.id = w.id;
+      delRemote.title = "Delete from OneDrive";
+      delRemote.textContent = "🗑";
+      li.appendChild(delRemote);
+    }
+  }
+  worldsListEl.appendChild(li);
 }
 
 function formatBytes(n) {

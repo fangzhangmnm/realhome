@@ -50,3 +50,40 @@ export const SNAP_TURN_DEG = 45;
 export const FOV_DEG = 75;
 export const NEAR = 0.05;
 export const FAR = 1000;
+
+// --- OneDrive / MSAL config ---
+//
+// To use OneDrive sync you must register a Microsoft Azure AD application
+// (free, personal Microsoft account works) and paste your Application
+// (client) ID below. Step-by-step: docs/onedrive-setup.md.
+//
+// `Files.ReadWrite.AppFolder` scope = the app sees ONLY a `RealHome` folder
+// inside the user's OneDrive Apps/. We never see their other files. Folder
+// is auto-created on first read; users drop .glb files into it.
+//
+// Azure registration:
+//   Display name:       RealHome
+//   Supported accounts: All Microsoft account users (personal + work/school)
+//   Platform:           SPA (must be SPA, not Web — uses PKCE auth code flow)
+//   Redirect URIs:      https://fangzhangmnm.github.io/realhome/  (prod)
+//                       http://localhost:8000/                    (local dev)
+export const ONEDRIVE_CLIENT_ID = "c987add3-12aa-4e3c-a08a-0c49c80a426e";
+// offline_access = give us a refresh token so silent acquireToken works
+// across page reloads forever (until user revokes). Without it the user
+// has to re-consent every hour-ish when the access token expires.
+export const ONEDRIVE_SCOPES = ["Files.ReadWrite.AppFolder", "offline_access"];
+// Special Graph path that resolves to the per-user, per-app sandbox folder.
+// /me/drive/special/approot is auto-created on first access.
+export const ONEDRIVE_APP_ROOT = "/me/drive/special/approot";
+// Redirect URI: must EXACTLY match what you registered in Azure. We use the
+// page's origin + pathname so it works for both local dev and GitHub Pages.
+// Don't include a trailing slash beyond pathname; Azure is strict.
+export function onedriveRedirectUri() {
+  return location.origin + location.pathname.replace(/\/$/, "/");
+}
+// True when the user has filled in a real CLIENT_ID. Used as the "is OneDrive
+// configured?" gate — without it, the sign-in UI stays hidden and no provider
+// gets registered.
+export function isOneDriveConfigured() {
+  return ONEDRIVE_CLIENT_ID && !ONEDRIVE_CLIENT_ID.startsWith("PASTE_");
+}

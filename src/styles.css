@@ -116,6 +116,19 @@ html, body {
 }
 .world-delete:hover { background: rgba(220, 100, 100, 0.18); color: #ff9a9a; }
 
+/* Second action for cached OneDrive worlds: 🗑 deletes the remote copy too.
+   Visually distinct from × — same color family but slightly more emphasis,
+   since the blast radius is bigger (permanent, cross-device). */
+.world-delete-remote {
+  background: transparent;
+  color: rgba(232, 214, 168, 0.55);
+  padding: 4px 8px;
+  font-size: 14px;
+  border-radius: 6px;
+  font-weight: 400;
+}
+.world-delete-remote:hover { background: rgba(220, 100, 100, 0.28); color: #ff6f6f; }
+
 .world-cache {
   background: transparent;
   color: rgba(232, 214, 168, 0.55);
@@ -125,6 +138,80 @@ html, body {
   font-weight: 400;
 }
 .world-cache:hover { background: rgba(232, 214, 168, 0.16); color: #e8d6a8; }
+
+/* Persistent inline error log (in the menu). Provider failures, auth errors,
+   cache failures land here and stay visible until the user dismisses them. */
+.error-log {
+  margin: 12px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(180, 60, 60, 0.14);
+  border: 1px solid rgba(220, 100, 100, 0.35);
+  text-align: left;
+  font-size: 12px;
+  color: #ffb3b3;
+  max-height: 30vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.error-log.hidden { display: none; }
+.error-log .error-entry {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  line-height: 1.35;
+  word-break: break-word;
+}
+.error-log .error-entry .error-time {
+  flex-shrink: 0;
+  font-family: ui-monospace, monospace;
+  color: rgba(255, 179, 179, 0.55);
+  font-size: 10px;
+  padding-top: 2px;
+}
+.error-log .error-dismiss {
+  margin-top: 4px;
+  align-self: flex-end;
+  background: transparent;
+  color: rgba(255, 179, 179, 0.75);
+  font-size: 11px;
+  padding: 2px 8px;
+}
+.error-log .error-dismiss:hover { background: rgba(220, 100, 100, 0.18); color: #fff; }
+
+/* OneDrive sign-in / sign-out row. Same spirit as .actions but distinct. */
+.onedrive-bar {
+  margin: 12px 0 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(0, 120, 212, 0.08);
+  border: 1px solid rgba(0, 120, 212, 0.30);
+  font-size: 12px;
+}
+.onedrive-bar.hidden { display: none; }
+.onedrive-status {
+  flex: 1;
+  text-align: left;
+  color: rgba(232, 214, 168, 0.75);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.onedrive-button {
+  background: rgba(0, 120, 212, 0.85);
+  color: #fff;
+  padding: 6px 12px;
+  font-size: 12px;
+  border-radius: 6px;
+}
+.onedrive-button:hover { background: rgba(0, 120, 212, 1); }
+.onedrive-button.hidden { display: none; }
 
 /* Subtle reset link at the bottom of the menu — destructive but easy to find */
 .reset-link {
