@@ -20,6 +20,10 @@
 //     remoteEtag      string|null  last seen etag / lastModifiedDateTime from source.
 //                              Used for "If-None-Match" conditional GET on bundled,
 //                              and for change detection on OneDrive listings.
+//     optimized       bool     true iff the blob has already been through the
+//                              gltf-transform pipeline. New uploads / fresh sync
+//                              start at false; the optimizer flips it after it
+//                              produces a meaningful size win.
 //
 // Migration policy: additive only. Bump DB_VERSION + handle in onupgradeneeded.
 // Never drop / rename a store or field destructively.
@@ -84,6 +88,7 @@ export async function addWorld(blob, name, opts = {}) {
     source: opts.source || "local",       // "local" | "bundled" | "onedrive"
     remoteId: opts.remoteId || null,      // URL for bundled, item-id for onedrive
     remoteEtag: opts.remoteEtag || null,  // last-seen etag/mtime for change detection
+    optimized: opts.optimized || false,   // true if the blob came out of the optimizer
   };
   const store = await tx("readwrite");
   await reqP(store.add(record));
@@ -124,31 +129,49 @@ export async function touchWorld(id) {
   await reqP(store.put(r));
 }
 
-// In-place replace the blob (used by gltf-transform pipeline after import).
-export async function replaceBlob(id, blob) {
+// In-place replace the blob. `opts.optimized` lets the gltf-transform pipeline
+// flip the optimized flag in the same write; leaving it undefined preserves
+// the existing value.
+export async function replaceBlob(id, blob, opts = {}) {
   const store = await tx("readwrite");
   const r = await reqP(store.get(id));
   if (!r) return;
   r.blob = blob;
   r.byteLength = blob.size;
+  if (opts.optimized !== undefined) r.optimized = opts.optimized;
   await reqP(store.put(r));
 }
 
-// Replace blob + remoteEtag atomically. Used by remote sync after detecting that
-// the source has changed (bundled URL or OneDrive item).
-export async function updateRemoteSync(id, blob, etag) {
+// Replace blob + remoteEtag atomically. Used by remote sync after the cache
+// pipeline has already optimized the new bytes — the caller passes
+// `optimized: true` once the optimizer succeeded.
+export async function updateRemoteSync(id, blob, etag, opts = {}) {
   const store = await tx("readwrite");
   const r = await reqP(store.get(id));
   if (!r) return;
   r.blob = blob;
   r.byteLength = blob.size;
   r.remoteEtag = etag;
+  if (opts.optimized !== undefined) r.optimized = opts.optimized;
   await reqP(store.put(r));
 }
 
 export async function deleteWorld(id) {
   const store = await tx("readwrite");
   await reqP(store.delete(id));
+}
+
+// Wipe everything — worlds and settings (including tombstones). Used by the
+// "Reset" debug entry in the menu; on reload, syncs re-fetch and the
+// optimizer runs from scratch.
+export async function clearAllWorlds() {
+  const store = await tx("readwrite");
+  await reqP(store.clear());
+}
+
+export async function clearAllSettings() {
+  const store = await txSettings("readwrite");
+  await reqP(store.clear());
 }
 
 // Storage quota readouts for the future settings UI.

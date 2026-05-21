@@ -33,6 +33,13 @@ export const TERMINAL_VELOCITY = 50;     // m/s — max downward speed (velY cla
 export const PLAYER_HEIGHT = 1.7;        // m — used in flat mode (no IPD)
 export const PLAYER_RADIUS = 0.3;        // m — capsule radius (used in collision later)
 
+// Step height: how tall a ledge / threshold / stair the player can climb (or
+// drop off) without jumping. The collision capsule is only built from y =
+// STEP_HEIGHT up — the leg zone is handled by a downward raycast that snaps
+// the rig to floor Y within ±STEP_HEIGHT each frame. Walls below this height
+// are invisible to the capsule, so they auto-step instead of blocking.
+export const STEP_HEIGHT = 0.3;          // m — Source ~0.4, Unreal ~0.45, ours a bit lower
+
 // Mouse-look sensitivity (flat mode)
 export const MOUSE_SENSITIVITY = 0.0022;
 

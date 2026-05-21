@@ -4,21 +4,30 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#0b0d10" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="RealHome" />
     <title>RealHome</title>
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="icon" href="./icon.svg" type="image/svg+xml" />
-    <link rel="apple-touch-icon" href="./icon.svg" />
+    <link rel="icon" href="./icon-192.png" type="image/png" sizes="192x192" />
+    <link rel="icon" href="./icon-512.png" type="image/png" sizes="512x512" />
+    <!-- iOS needs PNG; SVG isn't picked up by Add-to-Home-Screen reliably. -->
+    <link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png" />
     <link rel="stylesheet" href="./src/styles.css" />
 
-    <!-- ES module resolution. SW pre-caches these URLs so it works offline on Quest after first visit. -->
+    <!-- All deps vendored into src/vendor. Truly offline-capable from first visit,
+         no CDN dependency, repo-stable across runs. -->
     <script type="importmap">
       {
         "imports": {
-          "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
-          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"
+          "three": "./src/vendor/three/build/three.module.js",
+          "three/addons/": "./src/vendor/three/addons/",
+          "three-mesh-bvh": "./src/vendor/three-mesh-bvh/build/index.module.js",
+          "@gltf-transform/core": "./src/vendor/gltf-transform/core/index.js",
+          "@gltf-transform/extensions": "./src/vendor/gltf-transform/extensions/index.js",
+          "@gltf-transform/functions": "./src/vendor/gltf-transform/functions/index.js"
         }
       }
     </script>
@@ -36,12 +45,17 @@
 
         <div class="actions">
           <button id="pickButton" type="button">Add a world</button>
+          <button id="refreshButton" type="button" class="refresh-button" title="Check sources for updates">↻</button>
           <input type="file" id="fileInput" accept=".glb,.gltf,model/gltf-binary,model/gltf+json" hidden />
         </div>
 
         <p class="muted small">
           <kbd>WASD</kbd> move &nbsp;·&nbsp; <kbd>Mouse</kbd> look &nbsp;·&nbsp; <kbd>Space</kbd> jump &nbsp;·&nbsp; <kbd>Esc</kbd> menu
         </p>
+
+        <button id="cleanCacheButton" class="reset-link" type="button" title="Remove all cached worlds; bundled defaults reappear as available">
+          Clean cache
+        </button>
       </div>
     </div>
 
@@ -56,10 +70,15 @@
       <span id="hudStatus" class="hud-status"></span>
     </div>
 
-    <!-- New-version toast -->
+    <!-- New-version toast (PWA shell updated) -->
     <div id="updateToast" class="toast hidden">
       <span>New version available</span>
       <button id="updateReload" type="button">Reload</button>
+    </div>
+
+    <!-- World-content update toast (a cached world's source changed upstream) -->
+    <div id="worldUpdateToast" class="toast hidden">
+      <span id="worldUpdateText"></span>
     </div>
 
     <script type="module" src="./src/app.js"></script>

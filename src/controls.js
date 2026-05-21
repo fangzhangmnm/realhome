@@ -1,9 +1,15 @@
+import * as THREE from "three";
 import { PointerLockControls } from "three/addons/controls/PointerLockControls.js";
 
-// Flat-mode (desktop) input. Mouse-look via PointerLockControls; movement
-// from WASD + Space + a connected PC gamepad (standard mapping, e.g. Xbox).
-// All movement / jump / snap-turn calls go through the shared `player` object
-// so behaviour matches XR.
+// Flat-mode (desktop) input. Mouse-look via PointerLockControls; movement from
+// WASD + Space + a connected PC gamepad (standard mapping, e.g. Xbox).
+// Gamepad right stick = smooth yaw + pitch on the camera (standard FPS look).
+// Snap-turn is VR-only — desktop gets continuous rotation like every other FPS.
+
+const LOOK_SPEED = 5.0;        // rad/sec at full stick deflection (~286°/s)
+const LOOK_DEADZONE = 0.12;
+const PITCH_LIMIT = Math.PI / 2 - 0.01;
+const _euler = new THREE.Euler(0, 0, 0, "YXZ");
 
 export function createFlatControls(camera, player, domElement) {
   const controls = new PointerLockControls(camera, domElement);
@@ -23,7 +29,7 @@ export function createFlatControls(camera, player, domElement) {
 
   // Standard gamepad mapping (Xbox / DualShock / DualSense / Steam / generic):
   //   axes[0,1] = left stick (X right+, Y down+)   → walk
-  //   axes[2,3] = right stick                       → snap-turn (X) + (Y unused)
+  //   axes[2,3] = right stick (X right+, Y down+)  → smooth yaw + pitch (look)
   //   buttons[0] = bottom face button (A / Cross)   → jump
   function readGamepad() {
     const pads = navigator.getGamepads?.() || [];
@@ -43,19 +49,30 @@ export function createFlatControls(camera, player, domElement) {
     if (keys.space) jumpHeld = true;
 
     const pad = readGamepad();
-    let snapStickX = 0;
     if (pad) {
       // Gamepad walk only when keyboard idle — prevents double-counting.
       if (walkX === 0 && walkZ === 0) {
         walkX += pad.axes[0] || 0;        // stick right (+1) → strafe right
         walkZ += -(pad.axes[1] || 0);     // stick up (-1) → walk forward (+walkZ)
       }
-      snapStickX = pad.axes[2] || 0;      // right stick X — snap-turn
+      // Right stick — smooth FPS look on the camera (yaw + pitch). Coexists
+      // with mouse-look since PointerLockControls reads camera.quaternion fresh
+      // on each mousemove.
+      const lx = pad.axes[2] || 0;
+      const ly = pad.axes[3] || 0;
+      if (Math.abs(lx) > LOOK_DEADZONE || Math.abs(ly) > LOOK_DEADZONE) {
+        _euler.setFromQuaternion(camera.quaternion, "YXZ");
+        _euler.y -= lx * LOOK_SPEED * dt;
+        _euler.x -= ly * LOOK_SPEED * dt;
+        if (_euler.x > PITCH_LIMIT) _euler.x = PITCH_LIMIT;
+        else if (_euler.x < -PITCH_LIMIT) _euler.x = -PITCH_LIMIT;
+        _euler.z = 0;
+        camera.quaternion.setFromEuler(_euler);
+      }
       if (pad.buttons[0]?.pressed) jumpHeld = true;  // A / Cross button
     }
 
     player.applyMove(walkX, walkZ, dt);
-    player.applySnapTurn(snapStickX);
     player.applyJump(jumpHeld, dt);
   }
 

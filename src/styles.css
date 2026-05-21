@@ -77,6 +77,8 @@ html, body {
   background: rgba(232, 214, 168, 0.12);
   box-shadow: inset 2px 0 0 #e8d6a8;
 }
+.world-item.uncached .world-name { color: rgba(232, 214, 168, 0.65); }
+.world-item.uncached .world-meta { color: rgba(232, 214, 168, 0.40); font-style: italic; }
 
 .world-info { flex: 1; min-width: 0; }
 .world-name {
@@ -114,7 +116,39 @@ html, body {
 }
 .world-delete:hover { background: rgba(220, 100, 100, 0.18); color: #ff9a9a; }
 
-.actions { margin: 18px 0 6px; }
+.world-cache {
+  background: transparent;
+  color: rgba(232, 214, 168, 0.55);
+  padding: 4px 10px;
+  font-size: 15px;
+  border-radius: 6px;
+  font-weight: 400;
+}
+.world-cache:hover { background: rgba(232, 214, 168, 0.16); color: #e8d6a8; }
+
+/* Subtle reset link at the bottom of the menu — destructive but easy to find */
+.reset-link {
+  background: transparent;
+  color: rgba(232, 214, 168, 0.40);
+  font-size: 12px;
+  font-weight: 400;
+  padding: 4px 10px;
+  margin-top: 10px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.reset-link:hover { color: rgba(255, 154, 154, 0.85); background: transparent; }
+
+.actions { margin: 18px 0 6px; display: flex; justify-content: center; gap: 8px; align-items: center; }
+.refresh-button {
+  background: rgba(232, 214, 168, 0.10);
+  color: #e8d6a8;
+  padding: 10px 14px;
+  font-size: 16px;
+  border-radius: 8px;
+  font-weight: 400;
+}
+.refresh-button:hover { background: rgba(232, 214, 168, 0.20); }
 button {
   background: #e8d6a8;
   color: #0b0d10;

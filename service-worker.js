@@ -9,7 +9,7 @@
 //
 // Bump CACHE_VERSION when any precache file changes.
 
-const CACHE_VERSION = "v4-2026-05-20";
+const CACHE_VERSION = "v11-2026-05-21";
 const CACHE_NAME = `realhome-${CACHE_VERSION}`;
 
 const PRECACHE_URLS = [
@@ -17,6 +17,9 @@ const PRECACHE_URLS = [
   "./index.html",
   "./manifest.webmanifest",
   "./icon.svg",
+  "./icon-192.png",
+  "./icon-512.png",
+  "./apple-touch-icon.png",
   "./src/styles.css",
   "./src/app.js",
   "./src/config.js",
@@ -24,6 +27,35 @@ const PRECACHE_URLS = [
   "./src/controls.js",
   "./src/worldLoader.js",
   "./src/worldStore.js",
+  "./src/providers.js",
+  "./src/player.js",
+  "./src/xrControls.js",
+  "./src/collision.js",
+  "./src/vignette.js",
+  "./src/optimizer.js",
+  // All deps vendored — no CDN runtime dependency. Adding files here precaches
+  // them at install time; PWA is fully offline once installed.
+  "./src/vendor/three/build/three.module.js",
+  "./src/vendor/three/build/three.core.js",
+  "./src/vendor/three/addons/loaders/GLTFLoader.js",
+  "./src/vendor/three/addons/loaders/KTX2Loader.js",
+  "./src/vendor/three/addons/loaders/DRACOLoader.js",
+  "./src/vendor/three/addons/libs/meshopt_decoder.module.js",
+  "./src/vendor/three/addons/libs/ktx-parse.module.js",
+  "./src/vendor/three/addons/libs/zstddec.module.js",
+  "./src/vendor/three/addons/math/ColorSpaces.js",
+  "./src/vendor/three/addons/controls/PointerLockControls.js",
+  "./src/vendor/three/addons/utils/BufferGeometryUtils.js",
+  "./src/vendor/three/addons/utils/WorkerPool.js",
+  "./src/vendor/three/addons/libs/basis/basis_transcoder.js",
+  "./src/vendor/three/addons/libs/basis/basis_transcoder.wasm",
+  "./src/vendor/three/addons/libs/draco/gltf/draco_decoder.js",
+  "./src/vendor/three/addons/libs/draco/gltf/draco_decoder.wasm",
+  "./src/vendor/three/addons/libs/draco/gltf/draco_wasm_wrapper.js",
+  "./src/vendor/three-mesh-bvh/build/index.module.js",
+  "./src/vendor/gltf-transform/core/index.js",
+  "./src/vendor/gltf-transform/extensions/index.js",
+  "./src/vendor/gltf-transform/functions/index.js",
 ];
 
 // Files SW does NOT intercept — let the app's own sync logic handle freshness
@@ -34,27 +66,14 @@ function isPassthroughURL(url) {
   return url.origin === self.location.origin && /\.(glb|gltf)$/i.test(url.pathname);
 }
 
-// three.js + minimum addons we always load. Decoders (Draco/KTX2/Basis wasm) are
-// lazy-populated by the runtime fetch handler.
-const THREE_VERSION = "0.180.0";
-const CDN_PRECACHE_URLS = [
-  `https://cdn.jsdelivr.net/npm/three@${THREE_VERSION}/build/three.module.js`,
-  `https://cdn.jsdelivr.net/npm/three@${THREE_VERSION}/examples/jsm/loaders/GLTFLoader.js`,
-  `https://cdn.jsdelivr.net/npm/three@${THREE_VERSION}/examples/jsm/utils/BufferGeometryUtils.js`,
-  `https://cdn.jsdelivr.net/npm/three@${THREE_VERSION}/examples/jsm/controls/PointerLockControls.js`,
-];
-
-const CDN_DOMAINS = new Set(["cdn.jsdelivr.net", "unpkg.com"]);
+// CDN paths intentionally removed — all deps vendored under src/vendor/*.
+// (Old reasoning: precache + cache-first served from CDN, no precache files
+// here means no fetches to outside origins after this build.)
 
 self.addEventListener("install", (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE_NAME);
     await cache.addAll(PRECACHE_URLS);
-    for (const url of CDN_PRECACHE_URLS) {
-      try {
-        await cache.add(new Request(url, { mode: "cors" }));
-      } catch (_) {}
-    }
     await self.skipWaiting();
   })());
 });
@@ -88,23 +107,9 @@ self.addEventListener("fetch", (event) => {
   // requiring a SW version bump.
   if (isPassthroughURL(url)) return;
 
-  if (url.origin !== self.location.origin) {
-    if (CDN_DOMAINS.has(url.hostname)) {
-      event.respondWith((async () => {
-        const cache = await caches.open(CACHE_NAME);
-        const cached = await cache.match(req);
-        if (cached) return cached;
-        try {
-          const resp = await fetch(req);
-          if (resp && resp.ok) cache.put(req, resp.clone()).catch(() => {});
-          return resp;
-        } catch {
-          return new Response("offline cdn miss", { status: 503 });
-        }
-      })());
-    }
-    return;
-  }
+  // Cross-origin (OneDrive Graph, login.microsoftonline, etc.) → passthrough.
+  // We don't run any runtime libraries from CDN anymore; everything is vendored.
+  if (url.origin !== self.location.origin) return;
 
   event.respondWith((async () => {
     const cache = await caches.open(CACHE_NAME);

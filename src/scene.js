@@ -12,8 +12,10 @@ export function createScene(canvas) {
   });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.0;
+  // No tonemapping. Worlds are baked-lighting glbs — the texture data IS the
+  // final shaded color. ACES would re-compress highlights/mids and make every
+  // baked scene look murky. NoToneMapping keeps texture-as-authored.
+  renderer.toneMapping = THREE.NoToneMapping;
 
   // WebXR. local-floor reference space puts y=0 at the user's actual floor;
   // their head pose is reported relative to that, so the scene's spawn at the
@@ -54,11 +56,12 @@ export function createScene(canvas) {
   scene.add(playerRig);
 
   const camera = new THREE.PerspectiveCamera(FOV_DEG, window.innerWidth / window.innerHeight, NEAR, FAR);
-  // Local to rig. In flat mode this is the camera world pose; in XR the headset
-  // overrides this each frame. Z=3 keeps the desktop spawn 3m back from origin
-  // so authoring a world with content centered at origin is visible without the
-  // player needing to first walk backward to see anything.
-  camera.position.set(0, PLAYER_HEIGHT, 3);
+  // Local to rig. Must be (0, PLAYER_HEIGHT, 0) so the head sits directly above
+  // the rig's feet — otherwise the collision capsule (centered on rig) would be
+  // offset from where the camera renders, producing "I hit an invisible wall N
+  // meters ahead of the visible wall" misalignment. In XR the headset overrides
+  // this each frame.
+  camera.position.set(0, PLAYER_HEIGHT, 0);
   playerRig.add(camera);
 
   const worldRoot = new THREE.Group();
