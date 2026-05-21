@@ -50,14 +50,10 @@ export function createFlatControls(camera, player, domElement) {
 
     const pad = readGamepad();
     if (pad) {
-      // Gamepad walk only when keyboard idle — prevents double-counting.
       if (walkX === 0 && walkZ === 0) {
-        walkX += pad.axes[0] || 0;        // stick right (+1) → strafe right
-        walkZ += -(pad.axes[1] || 0);     // stick up (-1) → walk forward (+walkZ)
+        walkX += pad.axes[0] || 0;
+        walkZ += -(pad.axes[1] || 0);
       }
-      // Right stick — smooth FPS look on the camera (yaw + pitch). Coexists
-      // with mouse-look since PointerLockControls reads camera.quaternion fresh
-      // on each mousemove.
       const lx = pad.axes[2] || 0;
       const ly = pad.axes[3] || 0;
       if (Math.abs(lx) > LOOK_DEADZONE || Math.abs(ly) > LOOK_DEADZONE) {
@@ -69,11 +65,10 @@ export function createFlatControls(camera, player, domElement) {
         _euler.z = 0;
         camera.quaternion.setFromEuler(_euler);
       }
-      if (pad.buttons[0]?.pressed) jumpHeld = true;  // A / Cross button
+      if (pad.buttons[0]?.pressed) jumpHeld = true;
     }
 
-    player.applyMove(walkX, walkZ, dt);
-    player.applyJump(jumpHeld, dt);
+    return player.updateFlat(walkX, walkZ, jumpHeld, dt);
   }
 
   return { controls, update, isLocked: () => controls.isLocked };

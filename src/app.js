@@ -52,19 +52,8 @@ const current = {
 };
 let loading = false;
 
-// Defensive flag: set to true whenever we need the next XR frame to slide the
-// rig so the user's current HMD pose maps to virtual origin. Triggered from
-// session start AND every player.reset() (world switch + fall-too-far respawn).
-let xrNeedsRecenter = false;
 
-const player = createPlayer(
-  playerRig, camera,
-  () => current.collision,
-  // Defensive: every reset (world-switch, respawn-from-fall, ...) flags an
-  // HMD recenter so the user always lands at virtual origin in VR, regardless
-  // of where their playspace pose was when local-floor anchored.
-  () => { if (renderer.xr.isPresenting) xrNeedsRecenter = true; },
-);
+const player = createPlayer(playerRig, camera, () => current.collision);
 const flat = createFlatControls(camera, player, canvas);
 const xr = createXrControls(renderer, player);
 const vignette = createVignette(camera);
@@ -109,16 +98,11 @@ document.addEventListener("keydown", (e) => {
   if (overlay.classList.contains("hidden")) return;
   tryLock();
 });
-// Match overlay visibility to XR presenting state too.
-// Recenter on sessionstart — at the very first XR frame camera.position holds
-// the actual HMD pose; we shift the rig to put the user at virtual origin.
-// local-floor doesn't always anchor where the user is standing on Quest
-// (sometimes Guardian center, sometimes boot-time pose), so compensate
-// explicitly. (player.reset() also flips this flag — covers world switches
-// and respawns once we're already in VR.)
 renderer.xr.addEventListener("sessionstart", () => {
   overlay.classList.add("hidden");
-  xrNeedsRecenter = true;
+  // First XR frame (not this event) is when camera.position reflects the
+  // real HMD pose — defer the reset to the animation loop where we can read
+  // it and capture tracking_origin correctly.
 });
 renderer.xr.addEventListener("sessionend", () => {
   overlay.classList.remove("hidden");
@@ -319,16 +303,6 @@ async function streamOpenWorld(source, remoteId, name) {
   }
 }
 
-// Called from the render loop on the first XR frame after a session starts (or
-// after a world switch while in VR). Slides the rig to cancel out wherever
-// the HMD pose currently is, so the user spawns at world origin regardless
-// of where they were physically standing when local-floor was set up.
-function recenterToHead() {
-  playerRig.position.x = -camera.position.x;
-  playerRig.position.z = -camera.position.z;
-  xrNeedsRecenter = false;
-}
-
 function installWorld(result, name) {
   // Tear down the old collision system before the geometry it referenced is
   // disposed by setWorld. We cloned the geometry into the BVH so this is
@@ -351,9 +325,9 @@ function installWorld(result, name) {
     current.collision = createCollision(result.colliders);
   }
 
-  // Reset player to spawn (origin, 0 velocity, identity rotation). Otherwise the
-  // new world inherits the previous's exit pose / accumulated snap-turn angle.
-  // (reset's onReset hook flips xrNeedsRecenter for us if we're in VR.)
+  // Reset player to spawn. In VR, reset captures the current HMD pose as
+  // tracking_origin so the user lands at virtual origin regardless of where
+  // local-floor anchored.
   player.reset();
   hudName.textContent = name;
   const note = [];
@@ -617,16 +591,16 @@ function formatRelativeTime(ts) {
 // setAnimationLoop drives both the regular RAF and the WebXR frame loop —
 // three.js swaps the source automatically based on session state.
 const clock = new THREE.Clock();
+let wasPresenting = false;
 renderer.setAnimationLoop(() => {
   const dt = Math.min(0.05, clock.getDelta());
-  if (renderer.xr.isPresenting) {
-    if (xrNeedsRecenter) recenterToHead();   // first XR frame; camera.position is now real
-    xr.update(dt);
-    player.updateBodyTracking(vignette, dt);
-  } else {
-    flat.update(dt);
-    vignette.update(0, dt);   // fade out if we just exited VR
-  }
+  const isXR = renderer.xr.isPresenting;
+  // Capture tracking_origin from real HMD pose on the *first* XR frame —
+  // sessionstart fires before pose is read, so reset here when transitioning in.
+  if (isXR && !wasPresenting) player.reset();
+  wasPresenting = isXR;
+  const out = isXR ? xr.update(dt) : flat.update(dt);
+  vignette.update(out?.vignette ?? 0, dt);
   renderer.render(scene, camera);
 });
 

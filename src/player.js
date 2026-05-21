@@ -4,161 +4,222 @@ import {
   SNAP_TURN_DEG, PLAYER_HEIGHT, STEP_HEIGHT,
 } from "./config.js";
 
-const RESPAWN_DROP = 50;          // m below lowest collider before snapping back to origin
-const VIGNETTE_FULL_LAG = 0.3;    // m — lag at which the VR vignette is fully closed
-
-// Shared player physics + locomotion primitives. Both flat-mode controls
-// (keyboard + mouse + PC gamepad) and XR controls (Quest sticks) call into
-// the same methods so behaviour stays consistent between modes.
+// 3-layer model:
+//   Gameplay state  (this module owns these)       → player_pos, player_rot, tracking_origin
+//   Bridge / Rig    (three.js Group, we write)     → rig.position, rig.rotation
+//   Camera          (three.js Camera)              → XR writes (VR) / we set once (flat)
 //
-// Rig is the locomotion anchor — feet on floor. Camera is parented to it,
-// offset upward by PLAYER_HEIGHT in flat mode; in XR the headset pose
-// overrides camera local pose.
-//
-// Snap-turn rotates the rig (player's world frame). Walk computes direction
-// from the camera's world-forward (so you walk where you're looking, not
-// where your rig "faces" — important for VR head-look + thumbstick combo).
+// rig.position.xz = player_pos.xz − R(player_rot) · tracking_origin
+// rig.position.y  = player_pos.y + seated_bump
+// rig.rotation.y  = player_rot
+// head_world = rig + camera   (composed by three.js, gives the rendering view)
 
+const RESPAWN_DROP = 50;          // m below lowest collider before respawn
+const VIGNETTE_FULL_LAG = 0.3;    // m of head-body lag at which vignette is fully closed
 const STICK_DEADZONE = 0.15;
-const TURN_THRESHOLD = 0.7;     // push past this to fire a snap
-const TURN_RELEASE = 0.3;       // come back inside this to re-arm
+const TURN_THRESHOLD = 0.7;       // push past this to fire a snap
+const TURN_RELEASE = 0.3;         // come back inside this to re-arm
 
 const _forward = new THREE.Vector3();
 const _right = new THREE.Vector3();
-const _move = new THREE.Vector3();
 const _UP = new THREE.Vector3(0, 1, 0);
-const _camWorld = new THREE.Vector3();
-const _bodyTry = new THREE.Vector3();
+const _prev = new THREE.Vector3();
 
-// getCollision returns the current collision system (created from the loaded
-// world's `_collider` meshes), or null. Read fresh each frame so world switches
-// pick up the new colliders without re-instantiating the player.
-// onReset is called from inside reset() — used by the app to flag an
-// HMD-pose recenter on the next XR frame so respawns + world switches always
-// bring the user back to virtual origin in VR.
 export function createPlayer(rig, camera, getCollision = () => null, onReset = () => {}) {
+  // ── Gameplay state (SSoT) ─────────────────────────────────────────────
+  const player_pos = new THREE.Vector3();
+  let   player_rot = 0;
+  const tracking_origin = new THREE.Vector2();     // XZ in tracking space
+  let   seated_bump = 0;                            // future: artificial Y bump
+
+  // ── Internal physics state ────────────────────────────────────────────
   let velY = 0;
   let grounded = true;
   let lastTurnSign = 0;
 
-  // walkX = strafe (+right), walkZ = forward (+forward).
-  // Magnitude is clipped to 1 so diagonal stick doesn't go faster than cardinal.
-  function applyMove(walkX, walkZ, dt) {
-    const mag = Math.hypot(walkX, walkZ);
-    if (mag >= STICK_DEADZONE) {
-      camera.getWorldDirection(_forward);
-      _forward.y = 0;
-      _forward.normalize();
-      _right.copy(_forward).cross(_UP).normalize();
-      _move.set(0, 0, 0)
-        .addScaledVector(_forward, walkZ)
-        .addScaledVector(_right, walkX)
-        .normalize()
-        .multiplyScalar(Math.min(mag, 1) * WALK_SPEED * dt);
-      rig.position.add(_move);
-    }
-    // Resolve walls — always run, even when input is zero, in case the rig
-    // is sitting on a wall after a world swap or previous-frame push.
-    const c = getCollision();
-    if (c) c.resolveCapsule(rig.position, camera.position.y);
+  // Bridge: gameplay state → three.js rig node.
+  function syncRig() {
+    const c = Math.cos(player_rot), s = Math.sin(player_rot);
+    // R · tracking_origin   (rotation around +Y by player_rot)
+    const rox = c * tracking_origin.x + s * tracking_origin.y;
+    const roz = -s * tracking_origin.x + c * tracking_origin.y;
+    rig.position.x = player_pos.x - rox;
+    rig.position.z = player_pos.z - roz;
+    rig.position.y = player_pos.y + seated_bump;
+    rig.rotation.y = player_rot;
   }
 
-  // Discrete snap-turn — push the stick past TURN_THRESHOLD to fire once,
-  // come back inside TURN_RELEASE to re-arm. Standard VR comfort pattern.
-  function applySnapTurn(stickX) {
-    const absX = Math.abs(stickX);
-    if (absX < TURN_RELEASE) { lastTurnSign = 0; return; }
-    const sign = Math.sign(stickX);
-    if (absX > TURN_THRESHOLD && sign !== lastTurnSign) {
-      // Push right (+1) → turn right → rig rotates clockwise from above (–Y).
-      rig.rotation.y -= sign * (SNAP_TURN_DEG * Math.PI / 180);
-      lastTurnSign = sign;
-    }
-  }
-
-  // jumpHeld = current button/key state. Edge to trigger jump, held to extend
-  // (Better-Jump pattern, see config.js).
-  function applyJump(jumpHeld, dt) {
-    if (jumpHeld && grounded) {
-      velY = JUMP_VELOCITY;
-      grounded = false;
-    }
+  // ── Shared vertical physics: gravity + jump + ground/step + respawn ──
+  function applyVertical(jumpHeld, dt) {
+    if (jumpHeld && grounded) { velY = JUMP_VELOCITY; grounded = false; }
     const g = (jumpHeld && velY > 0) ? GRAVITY_HELD : GRAVITY;
     velY -= g * dt;
     if (velY < -TERMINAL_VELOCITY) velY = -TERMINAL_VELOCITY;
-    rig.position.y += velY * dt;
+    player_pos.y += velY * dt;
 
-    const c = getCollision();
-    if (c) {
-      const headHeight = camera.position.y;
-      // Push out of ceiling / overhead. If we hit a ceiling rising, the push is
-      // downward and the next-frame groundCheck handles the rest.
-      c.resolveCapsule(rig.position, headHeight);
-      // Ground / step: snap to the floor under us when within ±STEP_HEIGHT and
-      // not actively rising. Symmetric range = auto step-up + smooth slope walk
-      // + sticking to micro-drops (avoid bobbing on uneven floors). Drops
-      // bigger than STEP_HEIGHT just turn into normal falls.
-      const floorY = c.groundCheck(rig.position, headHeight);
-      if (floorY !== null) {
-        const distToFloor = rig.position.y - floorY;
-        if (velY <= 0 && distToFloor >= -STEP_HEIGHT && distToFloor <= STEP_HEIGHT) {
-          rig.position.y = floorY;
-          velY = 0;
-          grounded = true;
-        } else {
-          grounded = false;
-        }
+    const col = getCollision();
+    if (!col) {
+      // y=0 infinite floor fallback
+      if (player_pos.y <= 0) { player_pos.y = 0; velY = 0; grounded = true; }
+      return;
+    }
+    const headHeight = camera.position.y;
+    col.resolveCapsule(player_pos, headHeight);     // ceiling push
+    const floorY = col.groundCheck(player_pos, headHeight);
+    if (floorY !== null) {
+      const d = player_pos.y - floorY;
+      if (velY <= 0 && d >= -STEP_HEIGHT && d <= STEP_HEIGHT) {
+        player_pos.y = floorY;
+        velY = 0;
+        grounded = true;
       } else {
         grounded = false;
       }
-      // Respawn if we've fallen far below the lowest collider in the world.
-      if (Number.isFinite(c.lowerBound) && rig.position.y < c.lowerBound - RESPAWN_DROP) {
-        reset();
-      }
     } else {
-      // No collider mesh in this world — fall back to a y=0 infinite floor so
-      // the player still has somewhere to stand.
-      if (rig.position.y <= 0) {
-        rig.position.y = 0;
-        velY = 0;
-        grounded = true;
-      }
+      grounded = false;
+    }
+    if (Number.isFinite(col.lowerBound) && player_pos.y < col.lowerBound - RESPAWN_DROP) {
+      reset();
     }
   }
 
-  // VR-only. Each frame, project the head's world XZ as where the body wants to
-  // be, then run the same capsule resolve against the world. The lag between
-  // the head's actual position and the body's clipped position is the vignette
-  // amount — heads poked through walls / small holes will lag the body and
-  // darken the view; thumbstick locomotion stops the rig at walls cleanly with
-  // no lag (because rig is already collision-bounded above).
-  function updateBodyTracking(vignette, dt) {
-    if (!vignette) return;
-    const c = getCollision();
-    if (!c) { vignette.update(0, dt); return; }
-    camera.getWorldPosition(_camWorld);
-    _bodyTry.set(_camWorld.x, rig.position.y, _camWorld.z);
-    c.resolveCapsule(_bodyTry, camera.position.y);
-    const lagX = _camWorld.x - _bodyTry.x;
-    const lagZ = _camWorld.z - _bodyTry.z;
-    const lag = Math.hypot(lagX, lagZ);
-    vignette.update(Math.min(1, lag / VIGNETTE_FULL_LAG), dt);
+  // Walk direction in world XZ given local stick X/Z (+right, +forward).
+  // Uses camera's world-forward (head's actual look direction).
+  function walkVector(walkX, walkZ, dt) {
+    const mag = Math.hypot(walkX, walkZ);
+    if (mag < STICK_DEADZONE) return null;
+    camera.getWorldDirection(_forward);
+    _forward.y = 0;
+    _forward.normalize();
+    _right.copy(_forward).cross(_UP).normalize();
+    const speed = Math.min(mag, 1) * WALK_SPEED * dt;
+    return {
+      x: (_forward.x * walkZ + _right.x * walkX) * (speed / mag),
+      z: (_forward.z * walkZ + _right.z * walkX) * (speed / mag),
+    };
+    // Note: dividing by mag normalizes the (walkZ, walkX) magnitude before
+    // multiplying by speed — diagonal stick doesn't move faster than cardinal.
   }
 
-  // Hard reset to spawn — called on world switch, on XR session start, and on
-  // the fell-too-far respawn. Camera local sits at head height directly above
-  // the rig — must NOT carry the old flat Z=3 offset, that desyncs the body
-  // capsule (centered on rig) from the visible camera position.
+  // ── Flat (desktop) ───────────────────────────────────────────────────
+  // Mouse-look writes camera.quaternion; we ignore it for direction since
+  // camera.getWorldDirection already accounts for it. tracking_origin stays
+  // at (0,0) in flat (camera.position.xz stays at (0,0)), so the bridge
+  // degenerates to rig.position = player_pos / rig.rotation = player_rot.
+  function updateFlat(walkX, walkZ, jumpHeld, dt) {
+    const v = walkVector(walkX, walkZ, dt);
+    if (v) {
+      player_pos.x += v.x;
+      player_pos.z += v.z;
+      const col = getCollision();
+      if (col) col.resolveCapsule(player_pos, camera.position.y);
+    }
+    applyVertical(jumpHeld, dt);
+    syncRig();
+    return { vignette: 0 };
+  }
+
+  // ── VR ───────────────────────────────────────────────────────────────
+  // Single collide_and_slide per frame: joystick XOR roomscale.
+  //   Joystick > deadzone   → locomotion only; HMD physical drift accumulates
+  //                            as head_offset until vignette kicks in
+  //   Joystick idle         → roomscale: body chases HMD's tracking-space
+  //                            delta; tracking_origin follows body's actual move
+  //
+  // Snap-turn fires on the right-stick X axis edge (TURN_THRESHOLD with
+  // hysteresis at TURN_RELEASE). Snap forces roomscale catch-up then clears
+  // tracking_origin so head re-anchors to player_pos — rotation pivots on
+  // player_pos.
+  function updateVR(walkX, walkZ, snapStickX, jumpHeld, dt) {
+    // (1) Snap-turn edge detector
+    const absSnap = Math.abs(snapStickX);
+    if (absSnap < TURN_RELEASE) lastTurnSign = 0;
+    if (absSnap > TURN_THRESHOLD && Math.sign(snapStickX) !== lastTurnSign) {
+      const sign = Math.sign(snapStickX);
+      // push right (+1) → turn right → -Y rotation
+      snap(-sign * SNAP_TURN_DEG * Math.PI / 180);
+      lastTurnSign = sign;
+    }
+
+    // (2) XZ locomotion: joystick XOR roomscale
+    const v = walkVector(walkX, walkZ, dt);
+    if (v) {
+      // Joystick mode — tracking_origin untouched
+      player_pos.x += v.x;
+      player_pos.z += v.z;
+      const col = getCollision();
+      if (col) col.resolveCapsule(player_pos, camera.position.y);
+    } else {
+      // Roomscale mode — body chases HMD
+      const c = Math.cos(player_rot), s = Math.sin(player_rot);
+      const hmdX = camera.position.x, hmdZ = camera.position.z;
+      // intent_local = hmd_now − tracking_origin
+      const ilx = hmdX - tracking_origin.x;
+      const ilz = hmdZ - tracking_origin.y;
+      // intent_world = R · intent_local
+      const iwx =  c * ilx + s * ilz;
+      const iwz = -s * ilx + c * ilz;
+
+      _prev.copy(player_pos);
+      player_pos.x += iwx;
+      player_pos.z += iwz;
+      const col = getCollision();
+      if (col) col.resolveCapsule(player_pos, camera.position.y);
+      const awx = player_pos.x - _prev.x;
+      const awz = player_pos.z - _prev.z;
+
+      // tracking_origin += R⁻¹ · actual_world  (R⁻¹ for +Y rotation is R(-θ))
+      tracking_origin.x +=  c * awx - s * awz;
+      tracking_origin.y +=  s * awx + c * awz;
+    }
+
+    // (3) Vertical
+    applyVertical(jumpHeld, dt);
+
+    // (4) Bridge + vignette
+    syncRig();
+    const offX = camera.position.x - tracking_origin.x;
+    const offZ = camera.position.z - tracking_origin.y;
+    return { vignette: Math.min(1, Math.hypot(offX, offZ) / VIGNETTE_FULL_LAG) };
+  }
+
+  // ── Snap-turn (internal; call from updateVR) ─────────────────────────
+  function snap(deltaAngle) {
+    // 1. Force roomscale catch-up — accept whatever collision lets us do
+    const c = Math.cos(player_rot), s = Math.sin(player_rot);
+    const ilx = camera.position.x - tracking_origin.x;
+    const ilz = camera.position.z - tracking_origin.y;
+    const iwx =  c * ilx + s * ilz;
+    const iwz = -s * ilx + c * ilz;
+    player_pos.x += iwx;
+    player_pos.z += iwz;
+    const col = getCollision();
+    if (col) col.resolveCapsule(player_pos, camera.position.y);
+
+    // 2. Force-clear: head re-anchors to player_pos regardless of step 1's outcome
+    tracking_origin.x = camera.position.x;
+    tracking_origin.y = camera.position.z;
+
+    // 3. Rotate. syncRig() at end of updateVR will pick up new R.
+    player_rot += deltaAngle;
+  }
+
+  // ── Reset (world load / respawn) ─────────────────────────────────────
   function reset() {
-    rig.position.set(0, 0, 0);
-    rig.rotation.set(0, 0, 0);
-    camera.position.set(0, PLAYER_HEIGHT, 0);
-    camera.quaternion.set(0, 0, 0, 1);
+    player_pos.set(0, 0, 0);
+    player_rot = 0;
+    tracking_origin.set(camera.position.x, camera.position.z);
     velY = 0;
     grounded = true;
     lastTurnSign = 0;
+    syncRig();
     onReset();
   }
 
-  return { applyMove, applySnapTurn, applyJump, updateBodyTracking, reset };
+  return {
+    updateFlat,
+    updateVR,
+    reset,
+    setSeatedBump: (m) => { seated_bump = m; syncRig(); },
+  };
 }
