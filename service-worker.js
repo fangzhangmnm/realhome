@@ -9,7 +9,7 @@
 //
 // Bump CACHE_VERSION when any precache file changes.
 
-const CACHE_VERSION = "v11-2026-05-21";
+const CACHE_VERSION = "v12-2026-05-21";
 const CACHE_NAME = `realhome-${CACHE_VERSION}`;
 
 const PRECACHE_URLS = [
@@ -33,25 +33,14 @@ const PRECACHE_URLS = [
   "./src/collision.js",
   "./src/vignette.js",
   "./src/optimizer.js",
-  // All deps vendored — no CDN runtime dependency. Adding files here precaches
-  // them at install time; PWA is fully offline once installed.
+  // All deps vendored — no CDN runtime dependency. PWA is fully offline once
+  // installed. No KTX2 / Draco / Meshopt decoder wasm — we don't ship compressed
+  // glb support; artist-side tooling does compression-to-PNG before upload.
   "./src/vendor/three/build/three.module.js",
   "./src/vendor/three/build/three.core.js",
   "./src/vendor/three/addons/loaders/GLTFLoader.js",
-  "./src/vendor/three/addons/loaders/KTX2Loader.js",
-  "./src/vendor/three/addons/loaders/DRACOLoader.js",
-  "./src/vendor/three/addons/libs/meshopt_decoder.module.js",
-  "./src/vendor/three/addons/libs/ktx-parse.module.js",
-  "./src/vendor/three/addons/libs/zstddec.module.js",
-  "./src/vendor/three/addons/math/ColorSpaces.js",
   "./src/vendor/three/addons/controls/PointerLockControls.js",
   "./src/vendor/three/addons/utils/BufferGeometryUtils.js",
-  "./src/vendor/three/addons/utils/WorkerPool.js",
-  "./src/vendor/three/addons/libs/basis/basis_transcoder.js",
-  "./src/vendor/three/addons/libs/basis/basis_transcoder.wasm",
-  "./src/vendor/three/addons/libs/draco/gltf/draco_decoder.js",
-  "./src/vendor/three/addons/libs/draco/gltf/draco_decoder.wasm",
-  "./src/vendor/three/addons/libs/draco/gltf/draco_wasm_wrapper.js",
   "./src/vendor/three-mesh-bvh/build/index.module.js",
   "./src/vendor/gltf-transform/core/index.js",
   "./src/vendor/gltf-transform/extensions/index.js",

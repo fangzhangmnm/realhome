@@ -1,7 +1,4 @@
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { KTX2Loader } from "three/addons/loaders/KTX2Loader.js";
-import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
-import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
 
 // V0 loader: parse glb/gltf, pull out skybox + collider meshes by naming convention.
 // Later we'll wire DRACOLoader + KTX2Loader + MeshoptDecoder here.
@@ -13,22 +10,12 @@ import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
 
 const loader = new GLTFLoader();
 
-// Decoder pipeline: KTX2 (Basis Universal → ASTC/BC7 GPU-native), Draco (mesh
-// compression), Meshopt (alternative mesh compression). Decoder JS + wasm are
-// vendored into src/vendor/three/addons/libs — no CDN, fully offline.
-const decoderBase = "./src/vendor/three/addons/libs/";
-
-const ktx2 = new KTX2Loader().setTranscoderPath(`${decoderBase}basis/`);
-loader.setKTX2Loader(ktx2);
-loader.setMeshoptDecoder(MeshoptDecoder);
-
-const draco = new DRACOLoader().setDecoderPath(`${decoderBase}draco/gltf/`);
-loader.setDRACOLoader(draco);
-
-// KTX2Loader needs the renderer to detect supported compressed formats
-// (ASTC on Quest, BC7 on desktop). Caller passes it in once at boot.
-export function bindRenderer(renderer) {
-  ktx2.detectSupport(renderer);
+// No KTX2 / Draco / Meshopt decoders — we don't ship the wasm. glbs must be
+// plain (PNG/JPEG textures, uncompressed mesh accessors). For artists who
+// want compressed assets, that work happens server-side / before upload;
+// we'll render whatever GLTFLoader can decode natively.
+export function bindRenderer(/* renderer */) {
+  // no-op; kept for API stability with app.js
 }
 
 // Word-boundary match: matches "skybox", "_skybox", "xxx_skybox", "skybox.001", etc.
