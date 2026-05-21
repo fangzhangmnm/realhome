@@ -9,7 +9,7 @@
 //
 // Bump CACHE_VERSION when any precache file changes.
 
-const CACHE_VERSION = "v15-2026-05-21";
+const CACHE_VERSION = "v16-2026-05-21";
 const CACHE_NAME = `realhome-${CACHE_VERSION}`;
 
 const PRECACHE_URLS = [
@@ -32,7 +32,6 @@ const PRECACHE_URLS = [
   "./src/xrControls.js",
   "./src/collision.js",
   "./src/vignette.js",
-  "./src/optimizer.js",
   "./src/onedriveAuth.js",
   "./src/onedriveGraph.js",
   // All deps vendored — no CDN runtime dependency. PWA is fully offline once
@@ -44,9 +43,6 @@ const PRECACHE_URLS = [
   "./src/vendor/three/addons/controls/PointerLockControls.js",
   "./src/vendor/three/addons/utils/BufferGeometryUtils.js",
   "./src/vendor/three-mesh-bvh/build/index.module.js",
-  "./src/vendor/gltf-transform/core/index.js",
-  "./src/vendor/gltf-transform/extensions/index.js",
-  "./src/vendor/gltf-transform/functions/index.js",
   "./src/vendor/msal/index.js",
 ];
 

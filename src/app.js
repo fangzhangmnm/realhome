@@ -5,7 +5,6 @@ import { createFlatControls } from "./controls.js";
 import { createXrControls } from "./xrControls.js";
 import { createCollision } from "./collision.js";
 import { createVignette } from "./vignette.js";
-import { optimizeGlb } from "./optimizer.js";
 import { loadGlbFromFile, loadGlbFromBlob, bindRenderer as bindWorldLoaderRenderer } from "./worldLoader.js";
 import {
   addWorld, getWorld, listWorlds, touchWorld, deleteWorld,
@@ -265,9 +264,11 @@ async function loadFile(file) {
   loading = true;
   hudName.textContent = file.name;
   try {
-    // Optimize before persisting. Failure = upload failure — no half-cached
-    // raw record in IDB. (Optimizer also validates the glb in the process.)
-    const finalBlob = await runOptimizer(file);
+    // We persist the file as-is — no optimize pass. The artist's Blender
+    // export is the authoritative bytes; trying to re-pack here gave hangs
+    // and tiny savings on real-world glbs. If we need a size win in the
+    // future, do it server-side / in the artist's pipeline, not at runtime.
+    const finalBlob = file instanceof Blob ? file : new Blob([file], { type: "model/gltf-binary" });
     const result = await loadGlbFromBlob(finalBlob, file.name);
 
     // OneDrive sync (best effort). Falls back to local-only on any failure
@@ -279,9 +280,8 @@ async function loadFile(file) {
           source: "onedrive",
           remoteId: onedriveResult.remoteId,
           remoteEtag: onedriveResult.etag,
-          optimized: true,
         }
-      : { source: "local", optimized: true }
+      : { source: "local" }
     );
     current.id = record.id;
     current.source = record.source;
@@ -355,19 +355,6 @@ async function maybeUploadToOneDrive(filename, blob) {
     logError(`upload:${filename}`, `OneDrive upload: ${err.message || err}`);
     return null;
   }
-}
-
-// Run optimizer over a source blob. Returns the optimized blob if the result
-// is smaller, else the original. Throws if the optimizer module fails to load
-// or chokes on the glb — caller is responsible for propagating to the user.
-async function runOptimizer(sourceBlob, { quiet = false } = {}) {
-  if (!quiet) setStatus("optimizing…");
-  const optimized = await optimizeGlb(sourceBlob);
-  if (optimized.byteLength < sourceBlob.size * 0.97) {
-    if (!quiet) setStatus(`optimized: ${formatBytes(sourceBlob.size)} → ${formatBytes(optimized.byteLength)}`);
-    return new Blob([optimized], { type: "model/gltf-binary" });
-  }
-  return sourceBlob;
 }
 
 async function switchToWorld(id) {
@@ -538,10 +525,10 @@ function showWorldUpdateToast(name, isCurrent) {
   worldToastTimer = setTimeout(() => worldUpdateToast.classList.add("hidden"), 6000);
 }
 
-// --- Provider-based cache (unifies bundled / future onedrive) ---
-// Fetches the latest bytes via the provider, runs the optimizer, and only
-// writes to IDB if the optimizer succeeds. No "raw" half-state: cache is
-// atomic — either the world is in IDB optimized, or it isn't.
+// --- Provider-based cache (unifies bundled / onedrive) ---
+// Fetches the latest bytes via the provider and writes to IDB. No optimize
+// pass — bytes are stored verbatim (the artist's Blender export is the
+// authoritative form). Failure during download = no IDB write.
 //
 // `quiet`: suppresses the HUD chatter for background invalidation checks.
 async function cacheWorld(source, remoteId, name, opts = {}) {
@@ -573,29 +560,15 @@ async function cacheWorld(source, remoteId, name, opts = {}) {
     return existing;
   }
 
-  // Optimize before any IDB write. Failure = cache failure: nothing is
-  // persisted, the user sees the error and can retry.
-  let finalBlob;
-  try {
-    if (!quiet) showProgress(`Optimizing ${name}…`, -1);
-    finalBlob = await runOptimizer(result.blob, { quiet });
-  } catch (err) {
-    if (!quiet) {
-      hideProgress();
-      setStatus("cache failed");
-      logError(`cache:${source}:${remoteId}`, `optimize ${name}: ${err.message || err}`);
-    }
-    console.warn("cache failed during optimize:", err);
-    return null;
-  }
-
+  // No optimize pass. Write the bytes straight to IDB.
+  if (!quiet) hideProgress();
   let rec;
   if (existing) {
-    await updateRemoteSync(existing.id, finalBlob, result.etag, { optimized: true });
+    await updateRemoteSync(existing.id, result.blob, result.etag);
     rec = await getWorld(existing.id);
   } else {
-    rec = await addWorld(finalBlob, name, {
-      source, remoteId, remoteEtag: result.etag, optimized: true,
+    rec = await addWorld(result.blob, name, {
+      source, remoteId, remoteEtag: result.etag,
     });
   }
   if (!quiet) setStatus("");
