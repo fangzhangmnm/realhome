@@ -48,10 +48,15 @@ async function graphFetch(path, init = {}) {
   return resp;
 }
 
-// List all .glb files under the AppFolder root. Follows @odata.nextLink for
-// users with >200 files (cheap insurance — most users won't hit it).
+// List all .glb files under the AppFolder root, with sibling .png matched
+// in by basename. Follows @odata.nextLink for users with >200 files
+// (cheap insurance — most users won't hit it).
 //
-// Returns: [{ remoteId, name, etag, size }, ...]
+// The sidecar convention: `world.glb` ↔ `world.png` in the same folder.
+// If a sibling png exists, its item id is attached so the caller can
+// fetch the thumbnail without an extra round-trip.
+//
+// Returns: [{ remoteId, name, etag, size, thumbnailRemoteId?, thumbnailEtag? }]
 export async function listAppFolderGlbs() {
   const fields = "id,name,size,eTag,file";
   let url = `${APP_ROOT}/children?$select=${fields}&$top=200`;
@@ -62,14 +67,29 @@ export async function listAppFolderGlbs() {
     if (Array.isArray(body.value)) all.push(...body.value);
     url = body["@odata.nextLink"] || null;
   }
+
+  // Index PNG sidecars by basename (filename minus `.png`).
+  const pngByBase = new Map();
+  for (const it of all) {
+    if (!it.file || !/\.png$/i.test(it.name)) continue;
+    const base = it.name.replace(/\.png$/i, "");
+    pngByBase.set(base, it);
+  }
+
   return all
     .filter((it) => it.file && /\.glb$/i.test(it.name))
-    .map((it) => ({
-      remoteId: it.id,
-      name: it.name,
-      etag: it.eTag || "",
-      size: typeof it.size === "number" ? it.size : null,
-    }));
+    .map((it) => {
+      const base = it.name.replace(/\.glb$/i, "");
+      const sidecar = pngByBase.get(base);
+      return {
+        remoteId: it.id,
+        name: it.name,
+        etag: it.eTag || "",
+        size: typeof it.size === "number" ? it.size : null,
+        thumbnailRemoteId: sidecar?.id || null,
+        thumbnailEtag: sidecar?.eTag || "",
+      };
+    });
 }
 
 // Get metadata for one item (plus downloadUrl for streaming). Returns null on

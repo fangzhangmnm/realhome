@@ -13,8 +13,6 @@ import {
   clearAllWorlds, clearAllSettings,
   setThumbnail,
 } from "./worldStore.js";
-import { renderThumbnail } from "./thumbnailer.js";
-import { createLoadingPanel } from "./loadingPanel.js";
 import { providers } from "./providers.js";
 import { isOneDriveConfigured } from "./config.js";
 
@@ -74,7 +72,6 @@ const player = createPlayer(playerRig, camera, () => current.collision);
 const flat = createFlatControls(camera, player, canvas);
 const xr = createXrControls(renderer, player);
 const vignette = createVignette(camera);
-const loadingPanel = createLoadingPanel(camera);
 
 // --- Pointer lock (flat desktop) / VR session (Quest) ---
 function tryLock() {
@@ -121,15 +118,8 @@ document.addEventListener("keydown", (e) => {
 // XR view) so the user can pick a different world without leaving VR.
 // When NOT granted, hide the overlay — the DOM is invisible in immersive
 // anyway, and Quest's "running in background" panel takes over.
-// In-VR menu is not supported on Quest browser today. We tried dom-overlay
-// (didn't appear in immersive-vr) — see docs/user-flows.md for the
-// rationale. User switches worlds by exiting VR (Meta button), picking
-// from the menu, re-entering. The menu DOM is hidden during XR; the in-
-// scene loading panel is the only UI visible mid-immersion.
-//
-// xrDomOverlayGranted is kept as a defensive false in case dom-overlay
-// ever starts working — showLoading branches on it.
-let xrDomOverlayGranted = false;
+// In-VR menu is not supported on Quest browser today. See docs/user-flows.md.
+// The menu DOM is hidden during XR; user exits via Meta button to switch.
 renderer.xr.addEventListener("sessionstart", () => {
   document.body.classList.add("xr-active");
   overlay.classList.add("hidden");
@@ -202,7 +192,12 @@ worldsListEl.addEventListener("click", async (e) => {
   e.stopPropagation();
   const cacheBtn = e.target.closest(".world-cache");
   if (cacheBtn) {
-    await handleCache(cacheBtn.dataset.source, cacheBtn.dataset.remoteId, cacheBtn.dataset.worldName);
+    await handleCache(
+      cacheBtn.dataset.source,
+      cacheBtn.dataset.remoteId,
+      cacheBtn.dataset.worldName,
+      cacheBtn.dataset.thumbnailRemoteId || null,
+    );
     return;
   }
   const deleteRemoteBtn = e.target.closest(".world-delete-remote");
@@ -290,8 +285,8 @@ enterPromptCancel.addEventListener("click", (e) => {
 // ↓ button on uncached entries. Persists the blob to IDB and runs the
 // optimizer — but does NOT enter the world. User can tap the body afterwards
 // (or right now to enter and re-render from IDB on next session).
-async function handleCache(source, remoteId, name) {
-  await cacheWorld(source, remoteId, name);
+async function handleCache(source, remoteId, name, thumbnailRemoteId = null) {
+  await cacheWorld(source, remoteId, name, { thumbnailRemoteId });
   await renderWorldsList();
 }
 
@@ -538,10 +533,20 @@ function installWorld(result, name) {
     current.collision = createCollision(result.colliders);
   }
 
+  // Spawn convention: if the glb has an Empty named `_spawn` (or just
+  // `spawn`), the player resets to its world-space position + Y rotation.
+  // Otherwise falls back to (0, 0, 0). See worldLoader.extractSpawn.
+  player.setSpawnPoint(result.spawn);
   // Reset player to spawn. In VR, reset captures the current HMD pose as
   // tracking_origin so the user lands at virtual origin regardless of where
   // local-floor anchored.
   player.reset();
+  // Flat mode: PointerLockControls owns camera.quaternion via mouse-look.
+  // player.reset() doesn't touch it (mouse-look state is rig-relative).
+  // On world swap we want a clean look-forward — otherwise the user lands
+  // in the new world still pitched 60° up because that's where their
+  // mouse left off in the previous world.
+  if (!renderer.xr.isPresenting) camera.quaternion.identity();
   hudName.textContent = name;
   // Updating document.title so the Quest "running in background" panel
   // header reads cleanly (it inherits the tab title). See docs/ui-layers.md.
@@ -549,61 +554,23 @@ function installWorld(result, name) {
   const note = [];
   if (result.skyboxes.length) note.push(`skybox×${result.skyboxes.length}`);
   if (result.colliders.length) note.push(`collider×${result.colliders.length}`);
+  if (result.spawn) note.push("spawn");
   setStatus(note.join(" · "));
-
-  // Generate a thumbnail for this world if we have an IDB record and don't
-  // already have one. Background — failure is silent (placeholder stays).
-  maybeGenerateThumbnail(current.id, current.root).catch(() => {});
-}
-
-// Render a thumbnail off-screen and persist to IDB. No-op if the record
-// already has a thumbnail. Two callsites:
-//   - installWorld: after the user enters a world; uses current.root which
-//     just got attached to worldRoot
-//   - cacheWorld: after the user ↓-caches a world without entering. We
-//     parse the freshly-written blob just for the thumbnail (one extra
-//     parse, only on cache, only once per world)
-async function maybeGenerateThumbnail(id, rootGroup) {
-  if (!id || !rootGroup) return;
-  try {
-    const record = await getWorld(id);
-    if (!record || record.thumbnail instanceof Blob) return;
-    const blob = await renderThumbnail(rootGroup, renderer);
-    if (!blob) return;
-    await setThumbnail(id, blob);
-    // Refresh the menu so the new thumbnail shows next time the user opens
-    // it. Cheap if the menu is hidden; no flash.
-    renderWorldsList().catch(() => {});
-  } catch (err) {
-    console.warn("thumbnail generation failed:", err);
-  }
 }
 
 function setStatus(s) { hudStatus.textContent = s; }
 
-// Unified loading display. Picks the right render target:
-//   - flat / no XR  → DOM #progressBar (existing showProgress/hideProgress)
-//   - XR + dom-overlay  → DOM #progressBar (still visible inside overlay)
-//   - XR + NO dom-overlay → 3D loadingPanel parented to camera
-// Single SSoT: callers don't know or care which path renders.
+// Loading indicator. Always DOM-only now: the load-first flow keeps the
+// user in menu state until the world is ready, so the DOM progress bar
+// is always visible. No more 3D loading panel — see docs/user-flows.md.
 function showLoading(label, detail = "", fraction = -1) {
-  if (renderer.xr.isPresenting && !xrDomOverlayGranted) {
-    loadingPanel.show(label, detail, fraction);
-  } else {
-    const text = detail ? `${label} — ${detail}` : label;
-    showProgress(text, fraction);
-  }
+  const text = detail ? `${label} — ${detail}` : label;
+  showProgress(text, fraction);
 }
 function updateLoading(label, detail, fraction) {
-  if (renderer.xr.isPresenting && !xrDomOverlayGranted) {
-    loadingPanel.update(label, detail, fraction);
-  } else {
-    const text = detail ? `${label} — ${detail}` : label;
-    showProgress(text, fraction);
-  }
+  showLoading(label, detail, fraction);
 }
 function hideLoading() {
-  loadingPanel.hide();
   hideProgress();
 }
 
@@ -693,8 +660,12 @@ function showWorldUpdateToast(name, isCurrent) {
 // authoritative form). Failure during download = no IDB write.
 //
 // `quiet`: suppresses the HUD chatter for background invalidation checks.
+// `thumbnailRemoteId`: when provided (and the provider has fetchThumbnail),
+//                      a sidecar PNG is pulled into IDB after the world is
+//                      saved. Sidecar fetch failures are silent — the
+//                      gradient placeholder shows through.
 async function cacheWorld(source, remoteId, name, opts = {}) {
-  const { quiet = false } = opts;
+  const { quiet = false, thumbnailRemoteId = null } = opts;
   const p = providers.find((p) => p.source === source);
   if (!p) throw new Error(`no provider for source=${source}`);
   const existing = await findByRemoteId(source, remoteId);
@@ -735,15 +706,19 @@ async function cacheWorld(source, remoteId, name, opts = {}) {
   }
   if (!quiet) setStatus("");
 
-  // Generate a thumbnail off the freshly-cached blob if the record doesn't
-  // have one yet. One extra parse per cache, only once per world. Background.
-  if (rec && !rec.thumbnail) {
+  // Pull the sidecar PNG into IDB if the provider has one and we don't
+  // have it locally yet. Background — failure is silent (the gradient
+  // placeholder is the fallback).
+  if (rec && !rec.thumbnail && thumbnailRemoteId && typeof p.fetchThumbnail === "function") {
     (async () => {
       try {
-        const parsed = await loadGlbFromBlob(rec.blob, rec.name);
-        await maybeGenerateThumbnail(rec.id, parsed.root);
+        const blob = await p.fetchThumbnail(thumbnailRemoteId);
+        if (blob) {
+          await setThumbnail(rec.id, blob);
+          renderWorldsList().catch(() => {});
+        }
       } catch (err) {
-        console.warn(`thumbnail at cache time failed for ${name}:`, err);
+        console.warn(`sidecar thumbnail for ${name} failed:`, err);
       }
     })();
   }
@@ -931,6 +906,12 @@ async function renderWorldsList() {
           source: p.source,
           remoteId: it.remoteId,
           name: it.name,
+          // Sidecar metadata from the provider. thumbnailUrl is used as
+          // direct <img src> for bundled (cheap, browser caches). For
+          // OneDrive, thumbnailRemoteId is shipped through to handleCache
+          // so cacheWorld can pull the sidecar bytes into IDB.
+          thumbnailUrl: it.thumbnailUrl || null,
+          thumbnailRemoteId: it.thumbnailRemoteId || null,
         }, true, token);
       }
     })();
@@ -958,14 +939,30 @@ function appendWorldCard(w, uncached, token) {
     li.dataset.worldName = w.name;
   }
 
-  // Thumbnail image (or placeholder via card background gradient).
+  // Thumbnail. Three sources, in priority:
+  //   1. IDB blob (w.thumbnail) — cached worlds we've already fetched the
+  //      sidecar for
+  //   2. Same-origin URL (w.thumbnailUrl) — bundled worlds derive a URL
+  //      from the glb path; browser handles fetch + cache
+  //   3. Bundled cached fallback: if w.source is "bundled" with a known
+  //      remoteId URL but no thumbnail yet, derive the .png URL
+  // Otherwise: no <img>, the .world-card's gradient placeholder shows.
+  // onerror removes the <img> so a 404'd sidecar reveals the gradient.
+  let thumbSrc = null;
   if (w.thumbnail instanceof Blob) {
+    thumbSrc = URL.createObjectURL(w.thumbnail);
+    thumbnailUrls.push(thumbSrc);
+  } else if (w.thumbnailUrl) {
+    thumbSrc = w.thumbnailUrl;
+  } else if (w.source === "bundled" && w.remoteId) {
+    thumbSrc = w.remoteId.replace(/\.glb$/i, ".png");
+  }
+  if (thumbSrc) {
     const img = document.createElement("img");
     img.className = "world-thumb";
     img.alt = "";
-    const url = URL.createObjectURL(w.thumbnail);
-    thumbnailUrls.push(url);
-    img.src = url;
+    img.onerror = () => img.remove();
+    img.src = thumbSrc;
     li.appendChild(img);
   }
 
@@ -1029,6 +1026,7 @@ function appendWorldCard(w, uncached, token) {
       dl.dataset.source = w.source;
       dl.dataset.remoteId = w.remoteId;
       dl.dataset.worldName = w.name;
+      if (w.thumbnailRemoteId) dl.dataset.thumbnailRemoteId = w.thumbnailRemoteId;
       dl.title = "Download for offline";
       dl.textContent = "↓";
       actions.appendChild(dl);

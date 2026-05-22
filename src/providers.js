@@ -4,13 +4,25 @@
 //
 // Each provider exposes:
 //   source: string                                 ("bundled" | "onedrive")
-//   list():  Promise<{ remoteId, name }[]>         discover available items
+//   list():  Promise<{ remoteId, name, thumbnailUrl?, thumbnailRemoteId? }[]>
+//                                                  discover available items
 //   fetch(remoteId, ifNoneMatch?):                 pull one item
 //     → Promise<{ blob, etag }>                    new bytes
 //     → Promise<null>                              304 / offline / unchanged
+//   fetchThumbnail?(item):                         pull sidecar PNG bytes
+//     → Promise<Blob | null>                       null = no sidecar / 404
+//
+// Thumbnail strategy:
+//   - bundled: thumbnailUrl is a deterministic same-origin path
+//     (world.glb → world.png). Card binds <img src> directly; browser
+//     handles cache + 404 via onerror.
+//   - onedrive: thumbnailRemoteId comes from the AppFolder listing
+//     (sibling .png matched by basename). cacheWorld fetches the bytes
+//     once at cache time and stores in IDB alongside the world blob.
+//   - local: no sidecar source. Card shows the gradient placeholder.
 //
 // app.js's cacheWorld() routes between providers by `source` and shares one
-// flow for add / update / optimize across all of them.
+// flow for add / update / thumbnail across all of them.
 
 // Hardcoded list of worlds shipped with the app. Add entries here when we
 // want to make a new bundled world discoverable. SW does NOT precache these
@@ -27,7 +39,14 @@ function createBundledProvider() {
   return {
     source: "bundled",
     async list() {
-      return BUNDLED.map((b) => ({ remoteId: b.url, name: b.name }));
+      return BUNDLED.map((b) => ({
+        remoteId: b.url,
+        name: b.name,
+        // Sidecar path: same folder, same basename, .png extension.
+        // Artist drops a PNG next to the glb. If missing, the <img>
+        // load fires onerror and the gradient placeholder shows through.
+        thumbnailUrl: b.url.replace(/\.glb$/i, ".png"),
+      }));
     },
     // onProgress(loaded, total) called every chunk during body download.
     // `total` is 0 when Content-Length is missing; caller should treat that
@@ -108,11 +127,29 @@ function createOneDriveProvider() {
       const items = await graph.listAppFolderGlbs();
       // Stash sizes from list() so getSize() doesn't re-fetch per row.
       for (const it of items) if (it.size != null) sizeCache.set(it.remoteId, it.size);
-      return items.map((it) => ({ remoteId: it.remoteId, name: it.name }));
+      return items.map((it) => ({
+        remoteId: it.remoteId,
+        name: it.name,
+        thumbnailRemoteId: it.thumbnailRemoteId || null,
+        thumbnailEtag: it.thumbnailEtag || "",
+      }));
     },
     async fetch(remoteId, ifNoneMatch, onProgress) {
       const { graph } = await getMod();
       return graph.fetchItemContent(remoteId, ifNoneMatch, onProgress);
+    },
+    // Fetch a sidecar PNG by Graph item ID. Returns null on 404 / missing —
+    // caller falls back to the gradient placeholder. cacheWorld calls this
+    // when an item has a thumbnailRemoteId.
+    async fetchThumbnail(thumbnailRemoteId) {
+      if (!thumbnailRemoteId) return null;
+      try {
+        const { graph } = await getMod();
+        const result = await graph.fetchItemContent(thumbnailRemoteId);
+        return result?.blob || null;
+      } catch {
+        return null;
+      }
     },
     async getSize(remoteId) {
       if (sizeCache.has(remoteId)) return sizeCache.get(remoteId);

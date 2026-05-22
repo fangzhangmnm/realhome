@@ -9,7 +9,7 @@
 //
 // Bump CACHE_VERSION when any precache file changes.
 
-const CACHE_VERSION = "v18-2026-05-21";
+const CACHE_VERSION = "v19-2026-05-22";
 const CACHE_NAME = `realhome-${CACHE_VERSION}`;
 
 const PRECACHE_URLS = [
@@ -32,8 +32,6 @@ const PRECACHE_URLS = [
   "./src/xrControls.js",
   "./src/collision.js",
   "./src/vignette.js",
-  "./src/thumbnailer.js",
-  "./src/loadingPanel.js",
   "./src/onedriveAuth.js",
   "./src/onedriveGraph.js",
   // All deps vendored — no CDN runtime dependency. PWA is fully offline once

@@ -1,3 +1,4 @@
+import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
 // V0 loader: parse glb/gltf, pull out skybox + collider meshes by naming convention.
@@ -19,9 +20,10 @@ export function bindRenderer(/* renderer */) {
 }
 
 // Word-boundary match: matches "skybox", "_skybox", "xxx_skybox", "skybox.001", etc.
-// Does NOT match "skyboxer" / "myskyboxstuff". Same for collider.
+// Does NOT match "skyboxer" / "myskyboxstuff". Same for collider + spawn.
 const SKYBOX_RE   = /(^|[_\-\s.])skybox($|[_\-\s.\d])/i;
 const COLLIDER_RE = /(^|[_\-\s.])collider($|[_\-\s.\d])/i;
+const SPAWN_RE    = /(^|[_\-\s.])spawn($|[_\-\s.\d])/i;
 
 export async function loadGlbFromBlob(blob, name = "world") {
   const buf = await blob.arrayBuffer();
@@ -48,9 +50,34 @@ export function parseGlb(arrayBuffer, label = "world") {
 
       const skyboxes = extractSkyboxes(root);
       const colliders = extractColliders(root);
-      resolve({ root, skyboxes, colliders });
+      const spawn = extractSpawn(root);
+      resolve({ root, skyboxes, colliders, spawn });
     }, (err) => reject(err));
   });
+}
+
+// Spawn convention: an Object3D named "spawn", "_spawn", "spawn.001", etc.
+// in the glb. We take its world-space position and its Y rotation as the
+// player's reset target. Pitch / roll on the spawn marker are dropped —
+// the player stands upright. Type doesn't matter (Empty in Blender works
+// fine), only the name.
+//
+// Returns { position: Vector3, rotation: number } or null if no spawn
+// marker is in the scene. Caller falls back to origin in that case.
+function extractSpawn(root) {
+  let marker = null;
+  root.traverse((obj) => {
+    if (marker) return;
+    if (SPAWN_RE.test(obj.name || "")) marker = obj;
+  });
+  if (!marker) return null;
+  marker.updateMatrixWorld(true);
+  const position = new THREE.Vector3();
+  marker.getWorldPosition(position);
+  const quat = new THREE.Quaternion();
+  marker.getWorldQuaternion(quat);
+  const euler = new THREE.Euler().setFromQuaternion(quat, "YXZ");
+  return { position, rotation: euler.y };
 }
 
 function extractSkyboxes(root) {

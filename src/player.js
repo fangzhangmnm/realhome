@@ -32,6 +32,11 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
   const tracking_origin = new THREE.Vector2();     // XZ in tracking space
   let   seated_bump = 0;                            // future: artificial Y bump
 
+  // Spawn target — written by setSpawnPoint(), read by reset(). Defaults
+  // to origin when no `_spawn` Empty exists in the glb.
+  const spawn_pos = new THREE.Vector3();
+  let   spawn_rot = 0;
+
   // ── Internal physics state ────────────────────────────────────────────
   let velY = 0;
   let grounded = true;
@@ -204,10 +209,20 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
     player_rot += deltaAngle;
   }
 
+  // ── Spawn point (read from glb on installWorld, see worldLoader.js) ──
+  // Called by app.js before reset() during installWorld. Null clears back
+  // to origin so a world without a spawn marker behaves like the old
+  // hardcoded (0, 0, 0).
+  function setSpawnPoint(spawn) {
+    if (spawn?.position) spawn_pos.copy(spawn.position);
+    else spawn_pos.set(0, 0, 0);
+    spawn_rot = spawn?.rotation ?? 0;
+  }
+
   // ── Reset (world load / respawn) ─────────────────────────────────────
   function reset() {
-    player_pos.set(0, 0, 0);
-    player_rot = 0;
+    player_pos.copy(spawn_pos);
+    player_rot = spawn_rot;
     tracking_origin.set(camera.position.x, camera.position.z);
     velY = 0;
     grounded = true;
@@ -220,6 +235,7 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
     updateFlat,
     updateVR,
     reset,
+    setSpawnPoint,
     setSeatedBump: (m) => { seated_bump = m; syncRig(); },
   };
 }

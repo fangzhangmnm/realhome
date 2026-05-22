@@ -72,6 +72,23 @@ card to re-enter VR. See "Why no in-VR menu" below.
 
 ## Transitions in detail
 
+## Artist-side conventions
+
+What artists put in their glbs that the app reads:
+
+- **Skybox mesh** — name contains `skybox` (e.g. `skybox`, `_skybox`,
+  `skybox.001`). Rendered first, depth-disabled, no fog.
+- **Collider meshes** — name contains `collider`. Invisible but their
+  geometry feeds the BVH. Wall + floor collision.
+- **Spawn point** — `Empty` named `spawn` or `_spawn` placed in the
+  scene. Player resets to this world-space position + Y rotation on
+  world load and on respawn. Without one, player lands at origin.
+- **Sidecar thumbnail** — a PNG next to the glb with the same basename
+  (`house.glb` ↔ `house.png`). For bundled worlds, served from
+  `./worlds/`. For OneDrive, dropped in the AppFolder. Auto-discovered
+  and shown on the world's card. Optional — gradient placeholder if
+  missing.
+
 ### Enter a cached world (most common case)
 
 1. User in Menu. Cards painted from IDB, including thumbnails.
