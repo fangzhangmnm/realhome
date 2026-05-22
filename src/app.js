@@ -82,21 +82,8 @@ function tryLock() {
 // Fire requestSession synchronously inside the user gesture. World swap (if any)
 // happens in parallel; VR enters showing the current scene, new scene cuts in
 // once parsed.
-//
-// dom-overlay (optional): request that Quest's compositor render
-// #startOverlay (and any other DOM that's on top of the canvas) as a 2D
-// surface inside the XR view, so the user can keep using the regular HTML
-// menu while in immersive-vr. Browser may refuse — we log session.
-// domOverlayState on start so we can see whether it was granted.
-//
-// Why "optional": if Quest's WebXR runtime doesn't support it OR the user's
-// browser version is too old, the session must still start. If it's
-// "required" and the runtime refuses, requestSession rejects.
 function enterVR() {
-  navigator.xr.requestSession("immersive-vr", {
-    optionalFeatures: ["local-floor", "dom-overlay"],
-    domOverlay: { root: document.getElementById("startOverlay") },
-  })
+  navigator.xr.requestSession("immersive-vr", { optionalFeatures: ["local-floor"] })
     .then((session) => renderer.xr.setSession(session))
     .catch((err) => console.error("VR session failed:", err));
 }
@@ -130,36 +117,22 @@ document.addEventListener("keydown", (e) => {
 // XR view) so the user can pick a different world without leaving VR.
 // When NOT granted, hide the overlay — the DOM is invisible in immersive
 // anyway, and Quest's "running in background" panel takes over.
+// In-VR menu is not supported on Quest browser today. We tried dom-overlay
+// (didn't appear in immersive-vr) — see docs/user-flows.md for the
+// rationale. User switches worlds by exiting VR (Meta button), picking
+// from the menu, re-entering. The menu DOM is hidden during XR; the in-
+// scene loading panel is the only UI visible mid-immersion.
+//
+// xrDomOverlayGranted is kept as a defensive false in case dom-overlay
+// ever starts working — showLoading branches on it.
 let xrDomOverlayGranted = false;
 renderer.xr.addEventListener("sessionstart", () => {
-  const session = renderer.xr.getSession();
-  // domOverlayState is the canonical way to check whether the browser
-  // honored our request. type is "screen" for the AR/VR head-locked case.
-  xrDomOverlayGranted = !!session?.domOverlayState;
-  document.body.classList.toggle("xr-active", true);
-  document.body.classList.toggle("xr-dom-overlay", xrDomOverlayGranted);
-  // Log to BOTH console (for chrome://inspect) AND the persistent error
-  // log (visible after the user exits VR). The log entry is intentionally
-  // NOT cleared on sessionend so the user can see what happened from the
-  // headset without a debugger attached.
-  const diag = xrDomOverlayGranted
-    ? `dom-overlay granted (type=${session.domOverlayState.type})`
-    : "dom-overlay NOT granted by Quest browser — must exit VR to switch worlds";
-  console.log("[xr]", diag);
-  logError("xr:overlay", diag);
-  if (!xrDomOverlayGranted) {
-    overlay.classList.add("hidden");
-  }
-  // First XR frame (not this event) is when camera.position reflects the
-  // real HMD pose — defer the reset to the animation loop where we can read
-  // it and capture tracking_origin correctly.
+  document.body.classList.add("xr-active");
+  overlay.classList.add("hidden");
 });
 renderer.xr.addEventListener("sessionend", () => {
-  document.body.classList.remove("xr-active", "xr-dom-overlay");
-  xrDomOverlayGranted = false;
+  document.body.classList.remove("xr-active");
   overlay.classList.remove("hidden");
-  // Keep the xr:overlay entry in the log so the user can see what happened
-  // on their last attempt. They can × to dismiss when they're satisfied.
   checkRemoteUpdates();
 });
 

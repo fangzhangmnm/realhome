@@ -71,96 +71,18 @@ current world name from somewhere.
 **TODO (small):** set `document.title = "RealHome — " + world.name` in
 installWorld so the Quest panel header reads cleanly.
 
-## Goal: full in-VR menu
+## In-VR menu: decided to defer
 
-The current state: when the user exits XR (sessionend), they pop back to
-the 2D DOM menu. To pick another world they have to physically remove
-the headset / look at the screen.
+We tried `dom-overlay` on Quest browser (2026-05-22) and it didn't render
+in immersive-vr. The user-facing flow is now documented as
+"exit VR → use menu → re-enter VR" — see [docs/user-flows.md](user-flows.md).
 
-The desired state (from user spec): inside VR, the user can:
-- See and browse the worlds list
-- Tap (controller-raycast) a card to enter that world
-- Open a settings panel (snap-turn angle, seated bump, etc.)
-- Watch a loading bar while a world streams from OneDrive
-
-This requires moving the menu into the 3D scene. Three approaches:
-
-### Approach A — WebXR DOM Overlay
-
-Request `dom-overlay` as an optionalFeature; pass `#startOverlay` as the
-overlay root. Browser composites our actual HTML over the XR scene.
-
-Pros: zero code change to the menu — same HTML, same CSS.
-Cons: DOM Overlay was designed for handheld AR. Quest browser's
-support is patchy — typically renders as a fixed 2D plane locked to the
-user's head, which is jarring. Single overlay root only (drawer becomes
-awkward).
-
-Verdict: probably won't ship the experience we want on Quest.
-
-### Approach B — three.js HTMLMesh (rasterize DOM → texture)
-
-Use `three/addons/interactive/HTMLMesh.js` (we'd vendor it). Takes a DOM
-element, rasterizes it to a canvas via html2canvas-style serialization,
-and maps the canvas onto a 3D Mesh. Pair with `InteractiveGroup` for
-controller-raycasted click events that re-dispatch to the DOM element.
-
-Pros: reuses existing HTML/CSS; interactive via standard click events;
-both flat and VR works.
-Cons: rasterizes via foreignObject + canvas, which has subtle font /
-backdrop-filter / `<img>` rendering bugs across browsers. Quality is
-"OK at 1024-1536px" — anything thinner (the current 13px world-meta
-text) gets blurry. Re-rasterization on every change is expensive — we'd
-need to throttle or only update on visible state changes.
-Plus: we have to vendor the addons + a html2canvas implementation.
-
-Verdict: viable, but quality compromise is real.
-
-### Approach C — native three.js panels (sprite atlas + canvas textures)
-
-Build the menu from primitives: a card is a 3D plane with a CanvasTexture
-showing the thumbnail + name; the grid is positioned planes; clicks come
-from controller raycast + onClick handlers on each card. Loading panel
-already follows this pattern.
-
-Pros: pixel-perfect quality; can stylize with depth, lighting, animation
-that pure HTML can't; controller interaction feels native.
-Cons: every visual change requires duplicating effort in both DOM (flat
-menu) and 3D (VR menu). Significant code.
-
-Verdict: the right call for a polished VR experience, but biggest
-investment.
-
-### Hybrid recommendation
-
-For RealHome where the menu is small (cards + settings + sign-in):
-
-1. **Now** — Approach C for the worlds-list (already have thumbnails as
-   CanvasTexture material). Each card = a 3D plane in a grid layout.
-2. **Now** — Approach C for the settings drawer (locomotion sliders +
-   sign-in button + clean cache).
-3. **Later** — keep the DOM menu for flat-mode-only or as a fallback.
-4. **Later** — controller raycasting for interaction. Pointing ray
-   visible from each controller; trigger = click.
-
-Estimated scope: ~3–5 days of focused work. Cards as 3D objects fit our
-existing thumbnail pipeline cleanly.
-
-## Implementation order (proposed)
-
-1. Controller pointer ray + raycaster (visible laser from each
-   controller; intersects scene objects in a designated "ui" layer).
-2. 3D card grid built as a function of `listWorlds()` + provider lists,
-   parented to a `playerRig`-anchored anchor in front of the user.
-3. 3D button primitive (plane + canvas-rendered text + hover/active
-   states). Used for the action buttons and the sign-in.
-4. 3D settings panel — slider primitive for snap-turn angle / seated
-   bump / vignette intensity.
-5. Show the 3D menu when: not in a world, or when user presses menu
-   button on the controller mid-world.
-
-Until that's built: VR users see the loading panel (already in scene),
-but for menu interactions they must exit XR.
+The three approaches we considered before deferring (HTMLMesh, native
+three.js panels, dom-overlay) are described there in the "Why no in-VR
+menu" decision log. If Quest browser ships proper dom-overlay support
+later, re-add the optionalFeature in `enterVR` and the
+`xrDomOverlayGranted` branch in showLoading; the rest of the wiring
+(body class, CSS hooks) is already prepared.
 
 ## Loading indicator — current state
 
