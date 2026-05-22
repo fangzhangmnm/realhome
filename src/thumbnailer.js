@@ -1,88 +1,120 @@
 // Render a parsed glb scene to a PNG thumbnail.
 //
-// We use a SEPARATE renderer (not the main XR-enabled one) so this is safe
-// to call while the user is anywhere — including mid-XR if we ever want to.
-// The main renderer's framebuffer + render-target state is untouched.
+// Uses the MAIN renderer with a render target rather than spinning up a
+// second WebGLRenderer per call. The old "new WebGLRenderer per thumbnail"
+// approach silently failed on Quest mid-XR session — browsers limit
+// concurrent WebGL contexts and an XR-active runtime tends to be the one
+// holding the active context. Render targets are cheap, share the
+// renderer's GL context, and work whether or not an XR session is live.
 //
-// Sizing: 384px square is the highest quality we'll ever display
-// (card-grid cell at 2x DPI ~ 380px). Above that wastes bytes; below
-// hits a noticeable softness. Stored as PNG (alpha kept for skybox-less
-// scenes that show as transparent over the menu background).
+// Sizing: 384px square. Stored as PNG.
 //
-// Camera framing: front-elevated 30° angle, autofit to bounding box of
-// non-collider, non-skybox meshes. Conservative padding (1.4× radius)
-// avoids clipping the corners of square / boxy rooms.
+// Camera framing: front-elevated angle, autofit to bounding box of
+// non-collider, non-skybox meshes.
 
 import * as THREE from "three";
 
 const SIZE = 384;
-const FOV = 35;                  // degrees; smaller than gameplay (75) → less distortion
+const FOV = 35;
 const VIEW_DIR = new THREE.Vector3(0.5, 0.4, 1).normalize();
 const PADDING = 1.4;
 
 const SKYBOX_RE   = /(^|[_\-\s.])skybox($|[_\-\s.\d])/i;
 const COLLIDER_RE = /(^|[_\-\s.])collider($|[_\-\s.\d])/i;
 
-// rootGroup is the .scene from GLTFLoader output (THREE.Group). We don't
-// clone — instead we temporarily add to our own scene, render, remove. The
-// caller can then attach the same Group to the main scene without GPU
-// resource duplication.
-export async function renderThumbnail(rootGroup) {
-  const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = SIZE;
-  const renderer = new THREE.WebGLRenderer({
-    canvas,
-    antialias: true,
-    alpha: true,
-    preserveDrawingBuffer: true,
-  });
-  renderer.setPixelRatio(1);
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
-  // Match the main renderer's tonemapping policy (None) — baked textures
-  // are the final shaded color, ACES would crush them.
-  renderer.toneMapping = THREE.NoToneMapping;
-  renderer.setClearColor(0x141618, 0);    // alpha=0 transparent
+// One-time scene + render-target setup. Subsequent calls reuse the same
+// scene (just reparent the world group in/out), the same render target
+// (just clear), and the same canvas (just over-write pixels).
+let _scene = null;
+let _camera = null;
+let _renderTarget = null;
+let _canvas = null;
+let _ctx = null;
+let _flipBuffer = null;
 
-  const scene = new THREE.Scene();
-  // Lighting that mirrors the main scene defaults so PBR materials don't
-  // turn into flat black silhouettes in the preview.
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x222233, 0.9));
+function ensureSetup() {
+  if (_scene) return;
+  _scene = new THREE.Scene();
+  // Same lighting policy as the main scene defaults.
+  _scene.add(new THREE.HemisphereLight(0xffffff, 0x222233, 0.9));
   const dir = new THREE.DirectionalLight(0xffeecc, 1.1);
   dir.position.set(5, 10, 4);
-  scene.add(dir);
+  _scene.add(dir);
+  _camera = new THREE.PerspectiveCamera(FOV, 1, 0.05, 1000);
+  _renderTarget = new THREE.WebGLRenderTarget(SIZE, SIZE, {
+    format: THREE.RGBAFormat,
+    type: THREE.UnsignedByteType,
+    colorSpace: THREE.SRGBColorSpace,
+  });
+  _canvas = document.createElement("canvas");
+  _canvas.width = _canvas.height = SIZE;
+  _ctx = _canvas.getContext("2d");
+  _flipBuffer = new Uint8ClampedArray(SIZE * SIZE * 4);
+}
+
+// rootGroup is the .scene from GLTFLoader output. We temporarily reparent
+// to our private scene, render, then reattach to the caller's parent.
+// mainRenderer is the live three.js renderer (the one driving canvas + XR).
+export async function renderThumbnail(rootGroup, mainRenderer) {
+  ensureSetup();
 
   const previousParent = rootGroup.parent;
-  scene.add(rootGroup);
+  _scene.add(rootGroup);
   rootGroup.updateMatrixWorld(true);
 
   try {
+    // Frame the camera to the renderable content.
     const box = computeContentBounds(rootGroup);
-    const camera = new THREE.PerspectiveCamera(FOV, 1, 0.05, 1000);
     if (box.isEmpty()) {
-      camera.position.set(3, 2.5, 3);
-      camera.lookAt(0, 0, 0);
+      _camera.position.set(3, 2.5, 3);
+      _camera.lookAt(0, 0, 0);
     } else {
       const center = box.getCenter(new THREE.Vector3());
       const radius = box.getSize(new THREE.Vector3()).length() * 0.5;
       const dist = (radius * PADDING) / Math.tan((FOV * Math.PI / 180) * 0.5);
-      camera.position.copy(VIEW_DIR).multiplyScalar(dist).add(center);
-      camera.lookAt(center);
+      _camera.position.copy(VIEW_DIR).multiplyScalar(dist).add(center);
+      _camera.lookAt(center);
     }
+    _camera.updateProjectionMatrix();
 
-    renderer.render(scene, camera);
-    return await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    // Render into our target. XR's framebuffer + viewport state remain
+    // untouched as long as we save + restore the render target. three.js's
+    // XR manager only re-asserts its target on the next animation frame.
+    const prevTarget = mainRenderer.getRenderTarget();
+    const prevAutoClear = mainRenderer.autoClear;
+    const prevClearColor = mainRenderer.getClearColor(new THREE.Color());
+    const prevClearAlpha = mainRenderer.getClearAlpha();
+
+    mainRenderer.setRenderTarget(_renderTarget);
+    mainRenderer.setClearColor(0x141618, 1);
+    mainRenderer.autoClear = true;
+    mainRenderer.clear();
+    mainRenderer.render(_scene, _camera);
+
+    mainRenderer.setRenderTarget(prevTarget);
+    mainRenderer.setClearColor(prevClearColor, prevClearAlpha);
+    mainRenderer.autoClear = prevAutoClear;
+
+    // Read back pixels (bottom-up; we flip on the way into the canvas).
+    const pixels = new Uint8Array(SIZE * SIZE * 4);
+    mainRenderer.readRenderTargetPixels(_renderTarget, 0, 0, SIZE, SIZE, pixels);
+
+    const stride = SIZE * 4;
+    for (let y = 0; y < SIZE; y++) {
+      const srcRow = (SIZE - 1 - y) * stride;
+      const dstRow = y * stride;
+      _flipBuffer.set(pixels.subarray(srcRow, srcRow + stride), dstRow);
+    }
+    const imageData = new ImageData(_flipBuffer, SIZE, SIZE);
+    _ctx.putImageData(imageData, 0, 0);
+
+    return await new Promise((resolve) => _canvas.toBlob(resolve, "image/png"));
   } finally {
-    // Detach so caller's main scene can take ownership again.
-    scene.remove(rootGroup);
+    _scene.remove(rootGroup);
     if (previousParent) previousParent.add(rootGroup);
-    renderer.dispose();
   }
 }
 
-// Bounds of the renderable, non-skybox, non-collider content. Skybox is
-// huge (it surrounds the world) and would force the camera to zoom out so
-// far the actual room becomes a dot. Colliders are invisible meshes — also
-// often huge and bounding-box-shaped — same issue.
 function computeContentBounds(root) {
   const box = new THREE.Box3();
   root.traverse((obj) => {

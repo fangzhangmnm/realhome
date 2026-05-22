@@ -54,7 +54,7 @@ const onedriveStatus = document.getElementById("onedriveStatus");
 const onedriveSignIn = document.getElementById("onedriveSignIn");
 const onedriveSignOut = document.getElementById("onedriveSignOut");
 
-const { renderer, scene, camera, playerRig, setWorld } = createScene(canvas);
+const { renderer, scene, camera, playerRig, setWorld, setWorldVisible } = createScene(canvas);
 bindWorldLoaderRenderer(renderer);   // KTX2Loader needs renderer to pick ASTC/BC7
 
 // Currently loaded world. id is null when streaming (not in IDB) — match by
@@ -303,6 +303,8 @@ async function loadFile(file) {
   if (!/\.(glb|gltf)$/i.test(file.name)) { setStatus("not a .glb/.gltf"); return; }
   loading = true;
   hudName.textContent = file.name;
+  setWorldVisible(false);
+  showLoading("Loading", file.name, -1);
   try {
     // We persist the file as-is — no optimize pass. The artist's Blender
     // export is the authoritative bytes; trying to re-pack here gave hangs
@@ -333,7 +335,9 @@ async function loadFile(file) {
     console.error(err);
     setStatus("upload failed");
     logError(`upload:${file.name}`, `upload failed: ${err.message || err}`);
+    setWorldVisible(true);
   } finally {
+    hideLoading();
     loading = false;
   }
 }
@@ -401,6 +405,12 @@ async function switchToWorld(id) {
   if (loading || id === current.id) return;
   loading = true;
   setStatus("loading…");
+  // Black out the old world IMMEDIATELY (synchronous, before any await) so
+  // VR users don't see the previous world during the parse. User explicitly
+  // accepted "blackout during load" over the seamless-but-actually-jarring
+  // alternative. See docs/user-flows.md.
+  setWorldVisible(false);
+  showLoading("Loading", "", -1);
   try {
     const record = await getWorld(id);
     if (!record || !record.blob) throw new Error("world not found");
@@ -417,6 +427,9 @@ async function switchToWorld(id) {
     console.error(err);
     setStatus("load failed");
     logError(`load:${id}`, `load failed: ${err.message || err}`);
+    // Restore visibility so user sees something other than black if the
+    // load failed and they exit the menu back into… whatever was there.
+    setWorldVisible(true);
   } finally {
     hideLoading();
     loading = false;
@@ -431,6 +444,8 @@ async function streamOpenWorld(source, remoteId, name) {
   loading = true;
   setStatus("loading…");
   hudName.textContent = name;
+  // Black out immediately — same reason as switchToWorld.
+  setWorldVisible(false);
   showLoading("Downloading", name, 0);
   try {
     const p = providers.find((p) => p.source === source);
@@ -455,6 +470,7 @@ async function streamOpenWorld(source, remoteId, name) {
     console.error(err);
     setStatus("load failed");
     logError(`stream:${source}:${remoteId}`, `${name}: ${err.message || err}`);
+    setWorldVisible(true);
   } finally {
     hideLoading();
     loading = false;
@@ -498,18 +514,22 @@ function installWorld(result, name) {
 
   // Generate a thumbnail for this world if we have an IDB record and don't
   // already have one. Background — failure is silent (placeholder stays).
-  maybeGenerateThumbnail(current.id).catch(() => {});
+  maybeGenerateThumbnail(current.id, current.root).catch(() => {});
 }
 
-// Render a thumbnail off-screen and persist to IDB. No-op if there's no
-// IDB record, or the record already has a thumbnail. Run from installWorld
-// so first-entry of a world generates its preview.
-async function maybeGenerateThumbnail(id) {
-  if (!id || !current.root) return;
+// Render a thumbnail off-screen and persist to IDB. No-op if the record
+// already has a thumbnail. Two callsites:
+//   - installWorld: after the user enters a world; uses current.root which
+//     just got attached to worldRoot
+//   - cacheWorld: after the user ↓-caches a world without entering. We
+//     parse the freshly-written blob just for the thumbnail (one extra
+//     parse, only on cache, only once per world)
+async function maybeGenerateThumbnail(id, rootGroup) {
+  if (!id || !rootGroup) return;
   try {
     const record = await getWorld(id);
     if (!record || record.thumbnail instanceof Blob) return;
-    const blob = await renderThumbnail(current.root);
+    const blob = await renderThumbnail(rootGroup, renderer);
     if (!blob) return;
     await setThumbnail(id, blob);
     // Refresh the menu so the new thumbnail shows next time the user opens
@@ -675,6 +695,19 @@ async function cacheWorld(source, remoteId, name, opts = {}) {
     });
   }
   if (!quiet) setStatus("");
+
+  // Generate a thumbnail off the freshly-cached blob if the record doesn't
+  // have one yet. One extra parse per cache, only once per world. Background.
+  if (rec && !rec.thumbnail) {
+    (async () => {
+      try {
+        const parsed = await loadGlbFromBlob(rec.blob, rec.name);
+        await maybeGenerateThumbnail(rec.id, parsed.root);
+      } catch (err) {
+        console.warn(`thumbnail at cache time failed for ${name}:`, err);
+      }
+    })();
+  }
   return rec;
 }
 

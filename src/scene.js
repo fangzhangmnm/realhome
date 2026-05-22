@@ -75,17 +75,19 @@ export function createScene(canvas) {
     // Dispose old contents
     disposeChildren(worldRoot);
     while (worldRoot.children.length) worldRoot.remove(worldRoot.children[0]);
-
-    // Hide placeholder grid/cube once we have real content
-    const grid = scene.getObjectByName("__placeholderGrid");
-    if (grid) grid.visible = false;
-    const cube = scene.getObjectByName("__placeholderCube");
-    if (cube) cube.visible = false;
-
     worldRoot.add(group);
+    worldRoot.visible = true;
   }
 
-  return { renderer, scene, camera, playerRig, worldRoot, setWorld };
+  // Toggle visibility of the entire world (skybox + meshes + everything).
+  // Used to "black out" mid-transition so the user doesn't see the previous
+  // world's geometry while the next one is parsing. Cheap — three.js skips
+  // traversal entirely when visible=false.
+  function setWorldVisible(visible) {
+    worldRoot.visible = visible;
+  }
+
+  return { renderer, scene, camera, playerRig, worldRoot, setWorld, setWorldVisible };
 }
 
 function disposeChildren(group) {
