@@ -14,6 +14,7 @@ import {
   setThumbnail,
 } from "./worldStore.js";
 import { renderThumbnail } from "./thumbnailer.js";
+import { createLoadingPanel } from "./loadingPanel.js";
 import { providers } from "./providers.js";
 import { isOneDriveConfigured } from "./config.js";
 
@@ -69,6 +70,7 @@ const player = createPlayer(playerRig, camera, () => current.collision);
 const flat = createFlatControls(camera, player, canvas);
 const xr = createXrControls(renderer, player);
 const vignette = createVignette(camera);
+const loadingPanel = createLoadingPanel(camera);
 
 // --- Pointer lock (flat desktop) / VR session (Quest) ---
 function tryLock() {
@@ -194,13 +196,19 @@ worldsListEl.addEventListener("click", async (e) => {
   if (item) await handleEnter(item);
 });
 
-// Tap on world body = enter. Doesn't imply persistence:
-//   - cached entry → load from IDB blob and enter
-//   - uncached entry → stream fresh bytes from provider, parse, enter (no IDB write)
-// VR session is requested synchronously up-front so the user gesture isn't
-// lost across awaits.
+// Tap on world body = enter. Two cases:
+//   - cached entry  → switchToWorld (read IDB blob + parse)
+//   - uncached      → streamOpenWorld (download + parse, no IDB write)
+//
+// Order: enter VR / lock pointer FIRST, then load. The user-gesture
+// activation is consumed by enterVR/lock and would expire if we awaited
+// the parse first. While the world parses, the existing scene stays
+// visible — we cover it with a 3D loading panel parented to the camera
+// (visible both in VR and flat) so the user doesn't see the old world.
 async function handleEnter(item) {
+  if (loading) return;
   if (xrSupported && !renderer.xr.isPresenting) enterVR();
+  else tryLock();
 
   const id = item.dataset.id;
   const source = item.dataset.source;
@@ -209,12 +217,9 @@ async function handleEnter(item) {
     (id && id === current.id) ||
     (remoteId && source === current.source && remoteId === current.remoteId);
 
-  if (!isCurrent) {
-    if (id) await switchToWorld(id);
-    else await streamOpenWorld(source, remoteId, item.dataset.worldName || remoteId);
-  }
-
-  if (!xrSupported) tryLock();
+  if (isCurrent) return;
+  if (id) await switchToWorld(id);
+  else await streamOpenWorld(source, remoteId, item.dataset.worldName || remoteId);
 }
 
 // ↓ button on uncached entries. Persists the blob to IDB and runs the
@@ -386,6 +391,7 @@ async function switchToWorld(id) {
   try {
     const record = await getWorld(id);
     if (!record || !record.blob) throw new Error("world not found");
+    loadingPanel.show("Loading", record.name, -1);
     const result = await loadGlbFromBlob(record.blob, record.name);
     await touchWorld(id);
     current.id = id;
@@ -399,6 +405,7 @@ async function switchToWorld(id) {
     setStatus("load failed");
     logError(`load:${id}`, `load failed: ${err.message || err}`);
   } finally {
+    loadingPanel.hide();
     loading = false;
   }
 }
@@ -411,11 +418,19 @@ async function streamOpenWorld(source, remoteId, name) {
   loading = true;
   setStatus("loading…");
   hudName.textContent = name;
+  loadingPanel.show("Downloading", name, 0);
   try {
     const p = providers.find((p) => p.source === source);
     if (!p) throw new Error(`no provider for ${source}`);
-    const result = await p.fetch(remoteId);   // unconditional fetch
+    const result = await p.fetch(remoteId, undefined, (loaded, total) => {
+      const f = total > 0 ? loaded / total : -1;
+      const det = total > 0
+        ? `${name} · ${formatBytes(loaded)} / ${formatBytes(total)}`
+        : `${name} · ${formatBytes(loaded)}`;
+      loadingPanel.update("Downloading", det, f);
+    });
     if (!result) throw new Error("source unavailable");
+    loadingPanel.update("Loading", name, -1);
     const parsed = await loadGlbFromBlob(result.blob, name);
     current.id = null;
     current.source = source;
@@ -428,6 +443,7 @@ async function streamOpenWorld(source, remoteId, name) {
     setStatus("load failed");
     logError(`stream:${source}:${remoteId}`, `${name}: ${err.message || err}`);
   } finally {
+    loadingPanel.hide();
     loading = false;
   }
 }
@@ -459,6 +475,9 @@ function installWorld(result, name) {
   // local-floor anchored.
   player.reset();
   hudName.textContent = name;
+  // Updating document.title so the Quest "running in background" panel
+  // header reads cleanly (it inherits the tab title). See docs/ui-layers.md.
+  document.title = `RealHome — ${name}`;
   const note = [];
   if (result.skyboxes.length) note.push(`skybox×${result.skyboxes.length}`);
   if (result.colliders.length) note.push(`collider×${result.colliders.length}`);

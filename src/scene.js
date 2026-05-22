@@ -24,28 +24,21 @@ export function createScene(canvas) {
   renderer.xr.setReferenceSpaceType("local-floor");
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x0b0d10);
+  scene.background = new THREE.Color(0x000000);
 
-  // Default placeholder env (used until a glb provides a real skybox)
+  // Default lights — used by any world whose materials respond to lighting
+  // (most baked-lit glbs ignore lights entirely). Cheap; keep them around
+  // so the first installWorld doesn't need to set up its own.
   const hemi = new THREE.HemisphereLight(0xffffff, 0x222233, 0.9);
   scene.add(hemi);
   const dir = new THREE.DirectionalLight(0xffeecc, 1.1);
   dir.position.set(5, 10, 4);
   scene.add(dir);
 
-  // Reference floor (only shown when no world is loaded yet)
-  const grid = new THREE.GridHelper(20, 20, 0x44423c, 0x2a2926);
-  grid.position.y = 0;
-  grid.name = "__placeholderGrid";
-  scene.add(grid);
-
-  // Placeholder cube so the user sees something even before they pick a file
-  const cubeGeo = new THREE.BoxGeometry(1, 1, 1);
-  const cubeMat = new THREE.MeshStandardMaterial({ color: 0xe8d6a8, roughness: 0.6, metalness: 0.0 });
-  const cube = new THREE.Mesh(cubeGeo, cubeMat);
-  cube.position.set(0, 0.5, -2);
-  cube.name = "__placeholderCube";
-  scene.add(cube);
+  // No placeholder geometry. Before the user picks a world, the canvas is
+  // pure black — the menu overlay shows on top. Avoids the "what is this
+  // floating cube?" moment, and means we don't have to dispose anything
+  // on first installWorld.
 
   // Player rig: the locomotion anchor (feet on floor). Camera is a child of it,
   // offset upward by PLAYER_HEIGHT for flat-mode head pose. In XR, the headset
