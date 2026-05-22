@@ -939,16 +939,22 @@ function appendWorldCard(w, uncached, token) {
     li.dataset.worldName = w.name;
   }
 
-  // Thumbnail. Three sources, in priority:
-  //   1. IDB blob (w.thumbnail) — cached worlds we've already fetched the
-  //      sidecar for
-  //   2. Same-origin URL (w.thumbnailUrl) — bundled worlds derive a URL
-  //      from the glb path; browser handles fetch + cache
-  //   3. Bundled cached fallback: if w.source is "bundled" with a known
-  //      remoteId URL but no thumbnail yet, derive the .png URL
-  // Otherwise: no <img>, the .world-card's gradient placeholder shows.
+  // Thumbnail lifecycle: thumb is "cached" iff the world itself is cached.
+  // Otherwise pulled fresh per session (like metadata).
+  //   - cached, any source → IDB blob if set (w.thumbnail), or for bundled
+  //     derive the same-origin URL (effectively a free fetch via browser
+  //     cache + service-worker)
+  //   - uncached bundled → direct URL from provider.list (browser caches)
+  //   - uncached onedrive → lazy fetch via provider.getThumbnailViewUrl
+  //     (Graph downloadUrl, session-cached, expires ~1h naturally)
+  //   - uncached local: impossible (local uploads are always in IDB)
   // onerror removes the <img> so a 404'd sidecar reveals the gradient.
+  const img = document.createElement("img");
+  img.className = "world-thumb";
+  img.alt = "";
+  img.onerror = () => img.remove();
   let thumbSrc = null;
+  let lazyFetch = null;
   if (w.thumbnail instanceof Blob) {
     thumbSrc = URL.createObjectURL(w.thumbnail);
     thumbnailUrls.push(thumbSrc);
@@ -956,14 +962,22 @@ function appendWorldCard(w, uncached, token) {
     thumbSrc = w.thumbnailUrl;
   } else if (w.source === "bundled" && w.remoteId) {
     thumbSrc = w.remoteId.replace(/\.glb$/i, ".png");
+  } else if (w.thumbnailRemoteId) {
+    const p = providers.find((p) => p.source === w.source);
+    if (p?.getThumbnailViewUrl) {
+      lazyFetch = p.getThumbnailViewUrl(w.thumbnailRemoteId);
+    }
   }
   if (thumbSrc) {
-    const img = document.createElement("img");
-    img.className = "world-thumb";
-    img.alt = "";
-    img.onerror = () => img.remove();
     img.src = thumbSrc;
     li.appendChild(img);
+  } else if (lazyFetch) {
+    li.appendChild(img);
+    lazyFetch.then((url) => {
+      if (token !== renderToken) return;     // newer render started
+      if (url) img.src = url;
+      else img.remove();
+    }).catch(() => img.remove());
   }
 
   // Source badges (top-left)

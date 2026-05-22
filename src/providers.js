@@ -116,6 +116,10 @@ function createOneDriveProvider() {
   }
 
   const sizeCache = new Map();
+  // Session cache for sidecar PNG view URLs. downloadUrls expire (~1h) but
+  // we only need them within one page session. On reload they expire and
+  // we re-fetch. Same lifetime model as sizeCache.
+  const thumbnailViewUrlCache = new Map();
 
   return {
     source: "onedrive",
@@ -140,7 +144,8 @@ function createOneDriveProvider() {
     },
     // Fetch a sidecar PNG by Graph item ID. Returns null on 404 / missing —
     // caller falls back to the gradient placeholder. cacheWorld calls this
-    // when an item has a thumbnailRemoteId.
+    // when an item has a thumbnailRemoteId so the bytes land in IDB next to
+    // the world blob.
     async fetchThumbnail(thumbnailRemoteId) {
       if (!thumbnailRemoteId) return null;
       try {
@@ -148,6 +153,30 @@ function createOneDriveProvider() {
         const result = await graph.fetchItemContent(thumbnailRemoteId);
         return result?.blob || null;
       } catch {
+        return null;
+      }
+    },
+    // Per-session-cached sidecar view URL. Used for UNCACHED OneDrive
+    // entries so the menu can show a thumbnail without committing to a
+    // full download. Once the user ↓-caches the world, the bytes go to
+    // IDB via fetchThumbnail and this URL is no longer needed.
+    //
+    // Graph's @microsoft.graph.downloadUrl is a short-lived (~1h)
+    // pre-signed CDN URL — we cache it for the page session to avoid
+    // re-hitting Graph on every render, and re-fetch on the next reload.
+    async getThumbnailViewUrl(thumbnailRemoteId) {
+      if (!thumbnailRemoteId) return null;
+      if (thumbnailViewUrlCache.has(thumbnailRemoteId)) {
+        return thumbnailViewUrlCache.get(thumbnailRemoteId);
+      }
+      try {
+        const { graph } = await getMod();
+        const meta = await graph.getItemMeta(thumbnailRemoteId);
+        const url = meta?.downloadUrl || null;
+        thumbnailViewUrlCache.set(thumbnailRemoteId, url);
+        return url;
+      } catch {
+        thumbnailViewUrlCache.set(thumbnailRemoteId, null);
         return null;
       }
     },
