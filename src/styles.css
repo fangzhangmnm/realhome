@@ -377,22 +377,20 @@ button {
 }
 .drawer-x:hover { background: rgba(232, 214, 168, 0.08); color: #e8d6a8; }
 
-/* Settings rows inside the drawer (slider + value + hint) */
-.setting-row {
+/* Settings toggles inside the drawer */
+.setting-toggle {
   display: flex;
   align-items: center;
   gap: 10px;
+  cursor: pointer;
+  font-size: 14px;
+  color: rgba(232, 214, 168, 0.90);
 }
-.setting-row input[type="range"] {
-  flex: 1;
+.setting-toggle input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
   accent-color: #e8d6a8;
-}
-.setting-value {
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  font-size: 13px;
-  color: rgba(232, 214, 168, 0.85);
-  min-width: 60px;
-  text-align: right;
+  cursor: pointer;
 }
 .setting-hint {
   margin: 8px 0 0;

@@ -33,6 +33,13 @@ export const TERMINAL_VELOCITY = 50;     // m/s — max downward speed (velY cla
 export const PLAYER_HEIGHT = 1.7;        // m — used in flat mode (no IPD)
 export const PLAYER_RADIUS = 0.3;        // m — capsule radius (used in collision later)
 
+// Seated VR offset — additive vertical rig bump when the user toggles
+// "Seated mode" in Settings. 0.4m is the convention across Half-Life:
+// Alyx, Beat Saber, Unity's XR Toolkit default, etc. — roughly the
+// average gap between standing eye height (~1.6m) and seated eye height
+// in a chair (~1.2m). The user is sitting; the avatar stands.
+export const SEATED_BUMP_M = 0.4;
+
 // Step height: how tall a ledge / threshold / stair the player can climb (or
 // drop off) without jumping. The collision capsule is only built from y =
 // STEP_HEIGHT up — the leg zone is handled by a downward raycast that snaps

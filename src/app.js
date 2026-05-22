@@ -15,7 +15,7 @@ import {
   getSetting, setSetting,
 } from "./worldStore.js";
 import { providers } from "./providers.js";
-import { isOneDriveConfigured } from "./config.js";
+import { isOneDriveConfigured, SEATED_BUMP_M } from "./config.js";
 
 // Detected at boot: is this user agent capable of immersive-vr sessions?
 // Resolves async — by the time the user clicks a world card on Quest, set.
@@ -32,8 +32,7 @@ const fileInput = document.getElementById("fileInput");
 const pickButton = document.getElementById("pickButton");
 const worldsListEl = document.getElementById("worldsList");
 const cleanCacheButton = document.getElementById("cleanCacheButton");
-const heightSlider = document.getElementById("heightSlider");
-const heightValue = document.getElementById("heightValue");
+const seatedToggle = document.getElementById("seatedToggle");
 const refreshButton = document.getElementById("refreshButton");
 const menuToggle = document.getElementById("menuToggle");
 const menuToggleBadge = document.getElementById("menuToggleBadge");
@@ -163,22 +162,14 @@ cleanCacheButton.addEventListener("click", async (e) => {
   location.reload();
 });
 
-// --- Height adjustment ---
-// Vertical offset applied to the rig (player.setSeatedBump). Persisted
-// per-device in IDB settings so a seated user's preference survives
-// reload. Updates apply immediately — player.setSeatedBump re-syncs the
-// rig position.
-function formatHeight(v) {
-  return `${v >= 0 ? "+" : ""}${v.toFixed(2)} m`;
-}
-heightSlider.addEventListener("input", () => {
-  const v = parseFloat(heightSlider.value) || 0;
-  heightValue.textContent = formatHeight(v);
-  player.setSeatedBump(v);
-});
-heightSlider.addEventListener("change", () => {
-  const v = parseFloat(heightSlider.value) || 0;
-  setSetting("seatedBump", v).catch(() => {});
+// --- Seated mode toggle ---
+// On = lift the rig by SEATED_BUMP_M (config; 0.4m by convention).
+// Off = no offset. Persisted per-device so a seated user's preference
+// survives reload.
+seatedToggle.addEventListener("change", () => {
+  const on = !!seatedToggle.checked;
+  player.setSeatedBump(on ? SEATED_BUMP_M : 0);
+  setSetting("seatedMode", on).catch(() => {});
 });
 
 // --- Manual refresh (re-poll sources for updates) ---
@@ -861,13 +852,12 @@ onedriveSignOut.addEventListener("click", async (e) => {
 async function bootstrap() {
   await migrateLegacyTombstones();          // one-shot from previous localStorage build
 
-  // Restore persisted settings (height adjustment, future locomotion knobs).
-  // Sync writes to player.setSeatedBump so the rig position is correct
+  // Restore persisted settings (seated mode, future locomotion knobs).
+  // Sync write to player.setSeatedBump so the rig position is correct
   // before the first frame.
-  const seatedBump = Number(await getSetting("seatedBump", 0)) || 0;
-  heightSlider.value = String(seatedBump);
-  heightValue.textContent = formatHeight(seatedBump);
-  player.setSeatedBump(seatedBump);
+  const seatedMode = !!(await getSetting("seatedMode", false));
+  seatedToggle.checked = seatedMode;
+  player.setSeatedBump(seatedMode ? SEATED_BUMP_M : 0);
 
   // Show the OneDrive bar synchronously with the default "Not signed in"
   // state. If MSAL later discovers a cached account, refreshOneDriveStatus()

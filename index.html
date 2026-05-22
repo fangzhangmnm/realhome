@@ -122,12 +122,12 @@
       </section>
 
       <section class="drawer-section">
-        <h3>Height</h3>
-        <div class="setting-row">
-          <input type="range" id="heightSlider" min="-0.5" max="0.5" step="0.05" value="0" />
-          <span id="heightValue" class="setting-value">0.00 m</span>
-        </div>
-        <p class="setting-hint">Vertical offset for seated VR users. Lifts the rig so a seated user's head height matches a standing avatar.</p>
+        <h3>Seated mode</h3>
+        <label class="setting-toggle">
+          <input type="checkbox" id="seatedToggle" />
+          <span>Lift view by 0.4 m</span>
+        </label>
+        <p class="setting-hint">For seated VR users. Standard +0.4 m so a seated user's eye height matches a standing avatar (HL:Alyx / Beat Saber convention).</p>
       </section>
 
       <section class="drawer-section">
