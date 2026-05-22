@@ -42,11 +42,28 @@ function createBundledProvider() {
       return BUNDLED.map((b) => ({
         remoteId: b.url,
         name: b.name,
-        // Sidecar path: same folder, same basename, .png extension.
-        // Artist drops a PNG next to the glb. If missing, the <img>
-        // load fires onerror and the gradient placeholder shows through.
-        thumbnailUrl: b.url.replace(/\.glb$/i, ".png"),
+        // For bundled, the thumbnail "remote id" IS the URL. We use the
+        // same opaque-key abstraction as OneDrive (whose remote id is a
+        // Graph item id) so the card render code is one path. Artist
+        // drops a PNG next to the glb at the matching basename.
+        thumbnailRemoteId: b.url.replace(/\.glb$/i, ".png"),
       }));
+    },
+    // Same-origin URL. Sync-ish (Promise to match OneDrive's async).
+    async getThumbnailViewUrl(thumbnailUrl) {
+      return thumbnailUrl || null;
+    },
+    // Pull the bytes into a Blob (called at manual-cache time so the
+    // thumbnail goes into IDB next to the world for offline use).
+    async fetchThumbnail(thumbnailUrl) {
+      if (!thumbnailUrl) return null;
+      try {
+        const resp = await fetch(thumbnailUrl);
+        if (!resp.ok) return null;
+        return await resp.blob();
+      } catch {
+        return null;
+      }
     },
     // onProgress(loaded, total) called every chunk during body download.
     // `total` is 0 when Content-Length is missing; caller should treat that

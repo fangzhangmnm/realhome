@@ -89,6 +89,7 @@ export async function addWorld(blob, name, opts = {}) {
     remoteId: opts.remoteId || null,      // URL for bundled, item-id for onedrive
     remoteEtag: opts.remoteEtag || null,  // last-seen etag/mtime for change detection
     optimized: opts.optimized || false,   // true if the blob came out of the optimizer
+    thumbnailRemoteId: opts.thumbnailRemoteId || null,  // opaque key for sidecar re-fetch
   };
   const store = await tx("readwrite");
   await reqP(store.add(record));

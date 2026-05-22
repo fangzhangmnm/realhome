@@ -9,7 +9,7 @@
 //
 // Bump CACHE_VERSION when any precache file changes.
 
-const CACHE_VERSION = "v20-2026-05-22";
+const CACHE_VERSION = "v21-2026-05-22";
 const CACHE_NAME = `realhome-${CACHE_VERSION}`;
 
 const PRECACHE_URLS = [

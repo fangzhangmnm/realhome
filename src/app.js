@@ -12,6 +12,7 @@ import {
   migrateLegacyTombstones,
   clearAllWorlds, clearAllSettings,
   setThumbnail,
+  getSetting, setSetting,
 } from "./worldStore.js";
 import { providers } from "./providers.js";
 import { isOneDriveConfigured } from "./config.js";
@@ -31,6 +32,8 @@ const fileInput = document.getElementById("fileInput");
 const pickButton = document.getElementById("pickButton");
 const worldsListEl = document.getElementById("worldsList");
 const cleanCacheButton = document.getElementById("cleanCacheButton");
+const heightSlider = document.getElementById("heightSlider");
+const heightValue = document.getElementById("heightValue");
 const refreshButton = document.getElementById("refreshButton");
 const menuToggle = document.getElementById("menuToggle");
 const menuToggleBadge = document.getElementById("menuToggleBadge");
@@ -160,6 +163,24 @@ cleanCacheButton.addEventListener("click", async (e) => {
   location.reload();
 });
 
+// --- Height adjustment ---
+// Vertical offset applied to the rig (player.setSeatedBump). Persisted
+// per-device in IDB settings so a seated user's preference survives
+// reload. Updates apply immediately — player.setSeatedBump re-syncs the
+// rig position.
+function formatHeight(v) {
+  return `${v >= 0 ? "+" : ""}${v.toFixed(2)} m`;
+}
+heightSlider.addEventListener("input", () => {
+  const v = parseFloat(heightSlider.value) || 0;
+  heightValue.textContent = formatHeight(v);
+  player.setSeatedBump(v);
+});
+heightSlider.addEventListener("change", () => {
+  const v = parseFloat(heightSlider.value) || 0;
+  setSetting("seatedBump", v).catch(() => {});
+});
+
 // --- Manual refresh (re-poll sources for updates) ---
 refreshButton.addEventListener("click", async (e) => {
   e.stopPropagation();
@@ -286,7 +307,8 @@ enterPromptCancel.addEventListener("click", (e) => {
 // optimizer — but does NOT enter the world. User can tap the body afterwards
 // (or right now to enter and re-render from IDB on next session).
 async function handleCache(source, remoteId, name, thumbnailRemoteId = null) {
-  await cacheWorld(source, remoteId, name, { thumbnailRemoteId });
+  const rec = await cacheWorld(source, remoteId, name, { thumbnailRemoteId });
+  if (rec) await refreshThumbnailForRec(rec, thumbnailRemoteId);
   await renderWorldsList();
 }
 
@@ -702,27 +724,36 @@ async function cacheWorld(source, remoteId, name, opts = {}) {
   } else {
     rec = await addWorld(result.blob, name, {
       source, remoteId, remoteEtag: result.etag,
+      thumbnailRemoteId,                     // remember for offline re-display
     });
   }
   if (!quiet) setStatus("");
-
-  // Pull the sidecar PNG into IDB if the provider has one and we don't
-  // have it locally yet. Background — failure is silent (the gradient
-  // placeholder is the fallback).
-  if (rec && !rec.thumbnail && thumbnailRemoteId && typeof p.fetchThumbnail === "function") {
-    (async () => {
-      try {
-        const blob = await p.fetchThumbnail(thumbnailRemoteId);
-        if (blob) {
-          await setThumbnail(rec.id, blob);
-          renderWorldsList().catch(() => {});
-        }
-      } catch (err) {
-        console.warn(`sidecar thumbnail for ${name} failed:`, err);
-      }
-    })();
-  }
   return rec;
+}
+
+// Refresh the sidecar thumbnail for a cached world. Called from:
+//   - handleCache (manual ↓): grabs the first sidecar at cache time
+//   - checkRemoteUpdates (background): re-pulls thumbnails alongside the
+//     glb update check so the IDB image stays current when the artist
+//     changes the sidecar PNG
+// `idOverride` lets the manual path pass a fresh thumbnailRemoteId from
+// the provider.list() result, in case it's newer than what's in IDB.
+// Failure is silent — the gradient placeholder is the fallback.
+async function refreshThumbnailForRec(rec, idOverride = null) {
+  if (!rec) return;
+  const thumbId = idOverride || rec.thumbnailRemoteId;
+  if (!thumbId) return;
+  const p = providers.find((p) => p.source === rec.source);
+  if (!p?.fetchThumbnail) return;
+  try {
+    const blob = await p.fetchThumbnail(thumbId);
+    if (blob) {
+      await setThumbnail(rec.id, blob);
+      renderWorldsList().catch(() => {});
+    }
+  } catch (err) {
+    console.warn(`refreshThumbnail ${rec.name}:`, err);
+  }
 }
 
 // Background cache invalidation. For each cached remote-sourced world, ask
@@ -748,6 +779,9 @@ async function checkRemoteUpdates() {
       .catch((err) => {
         console.warn(`background sync ${w.source}:${w.remoteId} failed:`, err);
       });
+    // Thumbnail refresh runs independently: even if the glb didn't change
+    // (304), the artist might have updated the sidecar PNG.
+    refreshThumbnailForRec(w).catch(() => {});
   }
 }
 
@@ -826,6 +860,14 @@ onedriveSignOut.addEventListener("click", async (e) => {
 // the menu paint on this == "user sees no Sign in button for many seconds."
 async function bootstrap() {
   await migrateLegacyTombstones();          // one-shot from previous localStorage build
+
+  // Restore persisted settings (height adjustment, future locomotion knobs).
+  // Sync writes to player.setSeatedBump so the rig position is correct
+  // before the first frame.
+  const seatedBump = Number(await getSetting("seatedBump", 0)) || 0;
+  heightSlider.value = String(seatedBump);
+  heightValue.textContent = formatHeight(seatedBump);
+  player.setSeatedBump(seatedBump);
 
   // Show the OneDrive bar synchronously with the default "Not signed in"
   // state. If MSAL later discovers a cached account, refreshOneDriveStatus()
@@ -939,45 +981,43 @@ function appendWorldCard(w, uncached, token) {
     li.dataset.worldName = w.name;
   }
 
-  // Thumbnail lifecycle: thumb is "cached" iff the world itself is cached.
-  // Otherwise pulled fresh per session (like metadata).
-  //   - cached, any source → IDB blob if set (w.thumbnail), or for bundled
-  //     derive the same-origin URL (effectively a free fetch via browser
-  //     cache + service-worker)
-  //   - uncached bundled → direct URL from provider.list (browser caches)
-  //   - uncached onedrive → lazy fetch via provider.getThumbnailViewUrl
-  //     (Graph downloadUrl, session-cached, expires ~1h naturally)
-  //   - uncached local: impossible (local uploads are always in IDB)
-  // onerror removes the <img> so a 404'd sidecar reveals the gradient.
-  const img = document.createElement("img");
-  img.className = "world-thumb";
-  img.alt = "";
-  img.onerror = () => img.remove();
-  let thumbSrc = null;
-  let lazyFetch = null;
-  if (w.thumbnail instanceof Blob) {
-    thumbSrc = URL.createObjectURL(w.thumbnail);
-    thumbnailUrls.push(thumbSrc);
-  } else if (w.thumbnailUrl) {
-    thumbSrc = w.thumbnailUrl;
-  } else if (w.source === "bundled" && w.remoteId) {
-    thumbSrc = w.remoteId.replace(/\.glb$/i, ".png");
-  } else if (w.thumbnailRemoteId) {
-    const p = providers.find((p) => p.source === w.source);
-    if (p?.getThumbnailViewUrl) {
-      lazyFetch = p.getThumbnailViewUrl(w.thumbnailRemoteId);
+  // Thumbnail policy:
+  //   - online: always try fresh from the provider (network URL)
+  //   - offline / 404: fall back to IDB blob if the world is cached
+  //   - neither: gradient placeholder (img element removed)
+  // Bundled and OneDrive use the same render path; only the provider
+  // method's behavior differs (sync URL vs Graph round-trip). The IDB
+  // blob exists iff the world was manually cached via ↓ (cacheWorld
+  // pulls the sidecar at the same time as the glb).
+  const idbBlob = w.thumbnail instanceof Blob ? w.thumbnail : null;
+  const provider = providers.find((p) => p.source === w.source);
+  const thumbKey = w.thumbnailRemoteId
+    || (w.source === "bundled" && w.remoteId ? w.remoteId.replace(/\.glb$/i, ".png") : null);
+
+  if (idbBlob || thumbKey) {
+    const img = document.createElement("img");
+    img.className = "world-thumb";
+    img.alt = "";
+    li.appendChild(img);
+
+    const useIdb = () => {
+      if (!idbBlob) { img.remove(); return; }
+      img.onerror = () => img.remove();   // gradient if even the IDB blob fails
+      const url = URL.createObjectURL(idbBlob);
+      thumbnailUrls.push(url);
+      img.src = url;
+    };
+
+    if (thumbKey && provider?.getThumbnailViewUrl) {
+      img.onerror = useIdb;
+      provider.getThumbnailViewUrl(thumbKey).then((url) => {
+        if (token !== renderToken) return;
+        if (url) img.src = url;
+        else useIdb();
+      }).catch(useIdb);
+    } else {
+      useIdb();
     }
-  }
-  if (thumbSrc) {
-    img.src = thumbSrc;
-    li.appendChild(img);
-  } else if (lazyFetch) {
-    li.appendChild(img);
-    lazyFetch.then((url) => {
-      if (token !== renderToken) return;     // newer render started
-      if (url) img.src = url;
-      else img.remove();
-    }).catch(() => img.remove());
   }
 
   // Source badges (top-left)

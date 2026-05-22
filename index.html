@@ -122,6 +122,15 @@
       </section>
 
       <section class="drawer-section">
+        <h3>Height</h3>
+        <div class="setting-row">
+          <input type="range" id="heightSlider" min="-0.5" max="0.5" step="0.05" value="0" />
+          <span id="heightValue" class="setting-value">0.00 m</span>
+        </div>
+        <p class="setting-hint">Vertical offset for seated VR users. Lifts the rig so a seated user's head height matches a standing avatar.</p>
+      </section>
+
+      <section class="drawer-section">
         <h3>Cache</h3>
         <button id="cleanCacheButton" type="button" class="drawer-link" title="Remove all cached worlds; bundled defaults reappear as available">
           Clean cache
