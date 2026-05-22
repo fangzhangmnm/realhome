@@ -134,17 +134,21 @@ let xrDomOverlayGranted = false;
 renderer.xr.addEventListener("sessionstart", () => {
   const session = renderer.xr.getSession();
   // domOverlayState is the canonical way to check whether the browser
-  // honored our request. type is "screen" (the dom-overlay spec uses this
-  // for AR phone-as-window AND VR head-locked overlay).
+  // honored our request. type is "screen" for the AR/VR head-locked case.
   xrDomOverlayGranted = !!session?.domOverlayState;
   document.body.classList.toggle("xr-active", true);
   document.body.classList.toggle("xr-dom-overlay", xrDomOverlayGranted);
-  if (xrDomOverlayGranted) {
-    // Overlay stays visible — Quest paints it into the XR view.
-    logError("xr:overlay", `dom-overlay granted (type=${session.domOverlayState.type})`);
-  } else {
+  // Log to BOTH console (for chrome://inspect) AND the persistent error
+  // log (visible after the user exits VR). The log entry is intentionally
+  // NOT cleared on sessionend so the user can see what happened from the
+  // headset without a debugger attached.
+  const diag = xrDomOverlayGranted
+    ? `dom-overlay granted (type=${session.domOverlayState.type})`
+    : "dom-overlay NOT granted by Quest browser — must exit VR to switch worlds";
+  console.log("[xr]", diag);
+  logError("xr:overlay", diag);
+  if (!xrDomOverlayGranted) {
     overlay.classList.add("hidden");
-    logError("xr:overlay", "dom-overlay NOT granted — exit VR to switch worlds");
   }
   // First XR frame (not this event) is when camera.position reflects the
   // real HMD pose — defer the reset to the animation loop where we can read
@@ -154,7 +158,8 @@ renderer.xr.addEventListener("sessionend", () => {
   document.body.classList.remove("xr-active", "xr-dom-overlay");
   xrDomOverlayGranted = false;
   overlay.classList.remove("hidden");
-  clearError("xr:overlay");
+  // Keep the xr:overlay entry in the log so the user can see what happened
+  // on their last attempt. They can × to dismiss when they're satisfied.
   checkRemoteUpdates();
 });
 
