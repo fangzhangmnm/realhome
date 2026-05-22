@@ -53,8 +53,12 @@ const onedriveBar = document.getElementById("onedriveBar");
 const onedriveStatus = document.getElementById("onedriveStatus");
 const onedriveSignIn = document.getElementById("onedriveSignIn");
 const onedriveSignOut = document.getElementById("onedriveSignOut");
+const enterPrompt = document.getElementById("enterPrompt");
+const enterPromptName = document.getElementById("enterPromptName");
+const enterPromptButton = document.getElementById("enterPromptButton");
+const enterPromptCancel = document.getElementById("enterPromptCancel");
 
-const { renderer, scene, camera, playerRig, setWorld, setWorldVisible } = createScene(canvas);
+const { renderer, scene, camera, playerRig, setWorld } = createScene(canvas);
 bindWorldLoaderRenderer(renderer);   // KTX2Loader needs renderer to pick ASTC/BC7
 
 // Currently loaded world. id is null when streaming (not in IDB) — match by
@@ -213,27 +217,75 @@ worldsListEl.addEventListener("click", async (e) => {
 //   - cached entry  → switchToWorld (read IDB blob + parse)
 //   - uncached      → streamOpenWorld (download + parse, no IDB write)
 //
-// Order: enter VR / lock pointer FIRST, then load. The user-gesture
-// activation is consumed by enterVR/lock and would expire if we awaited
-// the parse first. While the world parses, the existing scene stays
-// visible — we cover it with a 3D loading panel parented to the camera
-// (visible both in VR and flat) so the user doesn't see the old world.
+// Order: LOAD FIRST, then enter VR / lock pointer. The load runs while
+// the user is still in menu state — DOM menu covers the canvas so the
+// previous world's geometry isn't visible, and setWorld() does an
+// atomic swap when the new world is parsed. No blackout needed.
+//
+// User-gesture: requestSession / pointer-lock both need a "transient
+// activation" that lasts ~5s after a click in Chrome. If the load
+// finishes inside that window we fire the request automatically. If
+// not, we show the enter prompt — a full-screen "Tap to enter" overlay
+// that solicits a fresh gesture from the user.
+const GESTURE_WINDOW_MS = 4000;     // safe margin under Chrome's ~5s
+
 async function handleEnter(item) {
   if (loading) return;
-  if (xrSupported && !renderer.xr.isPresenting) enterVR();
-  else tryLock();
+  hideEnterPrompt();
 
   const id = item.dataset.id;
   const source = item.dataset.source;
   const remoteId = item.dataset.remoteId;
+  const name = item.dataset.worldName
+    || item.querySelector(".world-name")?.textContent
+    || id || remoteId || "world";
   const isCurrent =
     (id && id === current.id) ||
     (remoteId && source === current.source && remoteId === current.remoteId);
 
-  if (isCurrent) return;
+  // Same world already loaded — just enter on this click's activation.
+  if (isCurrent) { enterImmersive(); return; }
+
+  const gestureTime = performance.now();
   if (id) await switchToWorld(id);
-  else await streamOpenWorld(source, remoteId, item.dataset.worldName || remoteId);
+  else await streamOpenWorld(source, remoteId, name);
+
+  // Bail if the load failed (current state didn't move).
+  const loaded =
+    (id && current.id === id) ||
+    (remoteId && current.source === source && current.remoteId === remoteId);
+  if (!loaded) return;
+
+  if (performance.now() - gestureTime < GESTURE_WINDOW_MS) {
+    enterImmersive();
+  } else {
+    showEnterPrompt(name);
+  }
 }
+
+// Fire VR session / pointer-lock using whatever live user activation the
+// caller has. Caller must be inside a fresh-enough gesture context.
+function enterImmersive() {
+  if (xrSupported && !renderer.xr.isPresenting) enterVR();
+  else tryLock();
+}
+
+function showEnterPrompt(name) {
+  enterPromptName.textContent = name;
+  enterPrompt.classList.remove("hidden");
+}
+function hideEnterPrompt() {
+  enterPrompt.classList.add("hidden");
+}
+enterPromptButton.addEventListener("click", (e) => {
+  e.stopPropagation();
+  hideEnterPrompt();
+  enterImmersive();
+});
+enterPromptCancel.addEventListener("click", (e) => {
+  e.stopPropagation();
+  hideEnterPrompt();
+});
 
 // ↓ button on uncached entries. Persists the blob to IDB and runs the
 // optimizer — but does NOT enter the world. User can tap the body afterwards
@@ -303,7 +355,6 @@ async function loadFile(file) {
   if (!/\.(glb|gltf)$/i.test(file.name)) { setStatus("not a .glb/.gltf"); return; }
   loading = true;
   hudName.textContent = file.name;
-  setWorldVisible(false);
   showLoading("Loading", file.name, -1);
   try {
     // We persist the file as-is — no optimize pass. The artist's Blender
@@ -335,7 +386,6 @@ async function loadFile(file) {
     console.error(err);
     setStatus("upload failed");
     logError(`upload:${file.name}`, `upload failed: ${err.message || err}`);
-    setWorldVisible(true);
   } finally {
     hideLoading();
     loading = false;
@@ -405,11 +455,6 @@ async function switchToWorld(id) {
   if (loading || id === current.id) return;
   loading = true;
   setStatus("loading…");
-  // Black out the old world IMMEDIATELY (synchronous, before any await) so
-  // VR users don't see the previous world during the parse. User explicitly
-  // accepted "blackout during load" over the seamless-but-actually-jarring
-  // alternative. See docs/user-flows.md.
-  setWorldVisible(false);
   showLoading("Loading", "", -1);
   try {
     const record = await getWorld(id);
@@ -427,9 +472,6 @@ async function switchToWorld(id) {
     console.error(err);
     setStatus("load failed");
     logError(`load:${id}`, `load failed: ${err.message || err}`);
-    // Restore visibility so user sees something other than black if the
-    // load failed and they exit the menu back into… whatever was there.
-    setWorldVisible(true);
   } finally {
     hideLoading();
     loading = false;
@@ -444,8 +486,6 @@ async function streamOpenWorld(source, remoteId, name) {
   loading = true;
   setStatus("loading…");
   hudName.textContent = name;
-  // Black out immediately — same reason as switchToWorld.
-  setWorldVisible(false);
   showLoading("Downloading", name, 0);
   try {
     const p = providers.find((p) => p.source === source);
@@ -470,7 +510,6 @@ async function streamOpenWorld(source, remoteId, name) {
     console.error(err);
     setStatus("load failed");
     logError(`stream:${source}:${remoteId}`, `${name}: ${err.message || err}`);
-    setWorldVisible(true);
   } finally {
     hideLoading();
     loading = false;

@@ -437,6 +437,71 @@ button {
 .onedrive-button:hover { background: rgba(0, 120, 212, 1); }
 .onedrive-button.hidden { display: none; }
 
+/* ── Enter-prompt overlay (shown when gesture expired during a slow load) ── */
+.enter-prompt {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.92);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.enter-prompt.hidden { display: none; }
+.enter-prompt-card {
+  text-align: center;
+  padding: 32px 40px;
+  border-radius: 14px;
+  background: rgba(20, 22, 26, 0.98);
+  border: 1px solid rgba(232, 214, 168, 0.20);
+  max-width: 420px;
+}
+.enter-prompt-title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.20em;
+  text-transform: uppercase;
+  color: rgba(232, 214, 168, 0.50);
+}
+.enter-prompt-name {
+  margin: 8px 0 24px;
+  font-size: 19px;
+  color: #e8d6a8;
+  word-break: break-word;
+}
+.enter-prompt-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 32px;
+  background: #e8d6a8;
+  color: #0b0d10;
+  border-radius: 10px;
+  font-size: 16px;
+  font-weight: 600;
+  transition: background 0.12s ease;
+}
+.enter-prompt-button:hover { background: #f0deb4; }
+.enter-prompt-button:active { transform: scale(0.97); }
+.enter-prompt-button-glyph {
+  font-size: 14px;
+  line-height: 1;
+}
+.enter-prompt-cancel {
+  display: block;
+  margin: 16px auto 0;
+  background: transparent;
+  color: rgba(232, 214, 168, 0.55);
+  font-size: 12px;
+  padding: 4px 10px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.enter-prompt-cancel:hover { color: rgba(255, 154, 154, 0.85); }
+
 /* ── Drag-and-drop overlay (briefly shown on dragenter) ─────────────────── */
 .drop-overlay {
   position: fixed; inset: 0;

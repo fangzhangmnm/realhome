@@ -138,6 +138,22 @@
       <p>Drop .glb to load</p>
     </div>
 
+    <!-- Enter-prompt overlay. Shown when a world finishes loading but the
+         user-activation token from their click has expired (slow load) —
+         user needs to provide a fresh gesture for the WebXR session /
+         pointer lock to start. -->
+    <div id="enterPrompt" class="enter-prompt hidden">
+      <div class="enter-prompt-card">
+        <p class="enter-prompt-title">Ready</p>
+        <p class="enter-prompt-name" id="enterPromptName">—</p>
+        <button id="enterPromptButton" type="button" class="enter-prompt-button">
+          <span class="enter-prompt-button-glyph">▶</span>
+          <span>Tap to enter</span>
+        </button>
+        <button id="enterPromptCancel" type="button" class="enter-prompt-cancel">Cancel</button>
+      </div>
+    </div>
+
     <!-- Progress bar (download + optimize during cache) -->
     <div id="progressBar" class="progress-bar hidden">
       <div id="progressLabel" class="progress-label"></div>

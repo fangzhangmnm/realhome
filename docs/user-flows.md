@@ -76,21 +76,35 @@ card to re-enter VR. See "Why no in-VR menu" below.
 
 1. User in Menu. Cards painted from IDB, including thumbnails.
 2. User clicks/taps a card.
-3. **Flat:** pointer lock requested synchronously (consumes user gesture).
-   **VR:** `navigator.xr.requestSession("immersive-vr")` synchronously.
-4. `showLoading("Loading", worldName, -1)` — appears as DOM progress bar in flat / 3D panel in VR.
-5. Parse the IDB blob via GLTFLoader. Build collision BVH. Install in scene.
-6. `player.reset()` — gameplay state recentered; in VR also captures HMD pose as tracking_origin.
+3. `showLoading("Loading", worldName, -1)` — DOM progress bar at top.
+4. Parse the IDB blob via GLTFLoader. Build collision BVH. `setWorld()` does
+   an atomic swap in the scene (old world's geometry replaced by new in
+   a single frame).
+5. `player.reset()` — gameplay state recentered.
+6. **Check the user-gesture window** — Chrome's transient activation
+   lasts ~5s after the click. We use a 4s safety margin.
+   - **Within window:** `enterImmersive()` fires — pointer lock (flat) /
+     `requestSession` (VR). Menu hides, world is visible.
+   - **Beyond window:** show the enter prompt — full-screen "Tap to enter"
+     overlay. User clicks → fresh gesture → `enterImmersive()`.
 7. `hideLoading()`. World is visible.
+
+The previous world's geometry is in the scene during step 4 but invisible
+because the menu DOM covers the canvas — no flash. After `setWorld()`
+swaps in the new world, the menu is still on top until step 6 fires
+pointer-lock / VR session.
 
 ### Enter an uncached (provider-available) world
 
-1. As above through step 3.
+1. As above through step 2.
 2. `showLoading("Downloading", worldName, 0)` with progress callback.
 3. Provider's `fetch(remoteId)` streams bytes. Each chunk updates the progress.
-4. After download, `updateLoading("Loading", worldName, -1)` — indeterminate while parsing.
-5. Parse + install as above. Note: NOT written to IDB. This is "stream-and-play."
-6. `hideLoading()`. World is visible.
+4. After download, parse + `setWorld()` swap (NOT written to IDB; this is
+   "stream-and-play").
+5. **User-gesture check** — same as cached case. Slow downloads ALMOST
+   certainly exceed the 4s window, so the enter prompt is the expected
+   path here.
+6. `hideLoading()`. World visible after user confirms.
 
 ### Cache an uncached world without entering (↓ button)
 
