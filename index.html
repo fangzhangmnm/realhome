@@ -67,38 +67,71 @@
 
     <!-- Worlds picker / pause menu (shown whenever pointer is unlocked) -->
     <div id="startOverlay" class="overlay">
-      <div class="overlay-card">
-        <h1>RealHome</h1>
-        <p class="muted small">Click a world to step inside.</p>
+      <header class="top-bar">
+        <h1 class="brand">RealHome</h1>
+        <div class="top-actions">
+          <button id="pickButton" type="button" class="top-button" title="Add a world from your device">
+            <span class="top-button-glyph">+</span>
+            <span class="top-button-label">Add</span>
+          </button>
+          <button id="refreshButton" type="button" class="top-icon" title="Check sources for updates">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 12a9 9 0 0 1-15.36 6.36L3 16M3 12a9 9 0 0 1 15.36-6.36L21 8"/>
+              <polyline points="21 3 21 8 16 8"/>
+              <polyline points="3 21 3 16 8 16"/>
+            </svg>
+          </button>
+          <button id="menuToggle" type="button" class="top-icon menu-toggle" title="Menu" aria-label="Menu">
+            <span></span><span></span><span></span>
+            <span id="menuToggleBadge" class="menu-toggle-badge hidden" title="OneDrive not signed in"></span>
+          </button>
+          <input type="file" id="fileInput" accept=".glb,.gltf,model/gltf-binary,model/gltf+json" hidden />
+        </div>
+      </header>
 
-        <ul id="worldsList" class="worlds-list" role="list"></ul>
-
+      <main class="menu-main">
         <!-- Persistent inline error/notice log. Provider failures, auth errors,
              cache failures appear here so they don't get swept away by the HUD. -->
         <div id="errorLog" class="error-log hidden" role="log"></div>
 
-        <div class="actions">
-          <button id="pickButton" type="button">Add a world</button>
-          <button id="refreshButton" type="button" class="refresh-button" title="Check sources for updates">↻</button>
-          <input type="file" id="fileInput" accept=".glb,.gltf,model/gltf-binary,model/gltf+json" hidden />
-        </div>
+        <ul id="worldsList" class="worlds-grid" role="list"></ul>
 
-        <!-- OneDrive sign-in / sign-out. Hidden until OneDrive provider is wired up. -->
-        <div id="onedriveBar" class="onedrive-bar hidden">
-          <span id="onedriveStatus" class="onedrive-status">Not signed in</span>
-          <button id="onedriveSignIn" type="button" class="onedrive-button">Sign in with Microsoft</button>
-          <button id="onedriveSignOut" type="button" class="onedrive-button hidden">Sign out</button>
-        </div>
-
-        <p class="muted small">
+        <p class="hints">
           <kbd>WASD</kbd> move &nbsp;·&nbsp; <kbd>Mouse</kbd> look &nbsp;·&nbsp; <kbd>Space</kbd> jump &nbsp;·&nbsp; <kbd>Esc</kbd> menu
         </p>
+      </main>
+    </div>
 
-        <button id="cleanCacheButton" class="reset-link" type="button" title="Remove all cached worlds; bundled defaults reappear as available">
+    <!-- Settings drawer (right slide-in, hamburger-triggered) -->
+    <div id="menuBackdrop" class="menu-backdrop" aria-hidden="true"></div>
+    <aside id="menuDrawer" class="menu-drawer" aria-hidden="true" aria-label="Settings">
+      <header class="drawer-head">
+        <h2>Settings</h2>
+        <button id="menuClose" type="button" class="drawer-x" aria-label="Close menu">✕</button>
+      </header>
+
+      <section class="drawer-section">
+        <h3>OneDrive</h3>
+        <div id="onedriveBar" class="onedrive-bar hidden">
+          <span id="onedriveStatus" class="onedrive-status">Not signed in</span>
+          <div class="onedrive-buttons">
+            <button id="onedriveSignIn" type="button" class="onedrive-button">Sign in with Microsoft</button>
+            <button id="onedriveSignOut" type="button" class="onedrive-button hidden">Sign out</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="drawer-section">
+        <h3>Cache</h3>
+        <button id="cleanCacheButton" type="button" class="drawer-link" title="Remove all cached worlds; bundled defaults reappear as available">
           Clean cache
         </button>
-      </div>
-    </div>
+      </section>
+
+      <section class="drawer-section drawer-foot">
+        <p class="drawer-version">RealHome &middot; PWA</p>
+      </section>
+    </aside>
 
     <!-- Drag-drop overlay -->
     <div id="dropOverlay" class="drop-overlay hidden">

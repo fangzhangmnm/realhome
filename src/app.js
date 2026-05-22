@@ -11,7 +11,9 @@ import {
   findByRemoteId, updateRemoteSync, requestPersist,
   migrateLegacyTombstones,
   clearAllWorlds, clearAllSettings,
+  setThumbnail,
 } from "./worldStore.js";
+import { renderThumbnail } from "./thumbnailer.js";
 import { providers } from "./providers.js";
 import { isOneDriveConfigured } from "./config.js";
 
@@ -31,6 +33,11 @@ const pickButton = document.getElementById("pickButton");
 const worldsListEl = document.getElementById("worldsList");
 const cleanCacheButton = document.getElementById("cleanCacheButton");
 const refreshButton = document.getElementById("refreshButton");
+const menuToggle = document.getElementById("menuToggle");
+const menuToggleBadge = document.getElementById("menuToggleBadge");
+const menuDrawer = document.getElementById("menuDrawer");
+const menuBackdrop = document.getElementById("menuBackdrop");
+const menuClose = document.getElementById("menuClose");
 const hudName = document.getElementById("hudName");
 const hudStatus = document.getElementById("hudStatus");
 const updateToast = document.getElementById("updateToast");
@@ -113,6 +120,21 @@ renderer.xr.addEventListener("sessionend", () => {
   overlay.classList.remove("hidden");
   checkRemoteUpdates();
 });
+
+// --- Settings drawer (right slide-in) ---
+function openDrawer() {
+  menuDrawer.classList.add("open");
+  menuBackdrop.classList.add("show");
+  menuDrawer.setAttribute("aria-hidden", "false");
+}
+function closeDrawer() {
+  menuDrawer.classList.remove("open");
+  menuBackdrop.classList.remove("show");
+  menuDrawer.setAttribute("aria-hidden", "true");
+}
+menuToggle.addEventListener("click", (e) => { e.stopPropagation(); openDrawer(); });
+menuClose.addEventListener("click", (e) => { e.stopPropagation(); closeDrawer(); });
+menuBackdrop.addEventListener("click", closeDrawer);
 
 // --- Clean cache (OneDrive-style "remove local copies") ---
 cleanCacheButton.addEventListener("click", async (e) => {
@@ -441,6 +463,29 @@ function installWorld(result, name) {
   if (result.skyboxes.length) note.push(`skybox×${result.skyboxes.length}`);
   if (result.colliders.length) note.push(`collider×${result.colliders.length}`);
   setStatus(note.join(" · "));
+
+  // Generate a thumbnail for this world if we have an IDB record and don't
+  // already have one. Background — failure is silent (placeholder stays).
+  maybeGenerateThumbnail(current.id).catch(() => {});
+}
+
+// Render a thumbnail off-screen and persist to IDB. No-op if there's no
+// IDB record, or the record already has a thumbnail. Run from installWorld
+// so first-entry of a world generates its preview.
+async function maybeGenerateThumbnail(id) {
+  if (!id || !current.root) return;
+  try {
+    const record = await getWorld(id);
+    if (!record || record.thumbnail instanceof Blob) return;
+    const blob = await renderThumbnail(current.root);
+    if (!blob) return;
+    await setThumbnail(id, blob);
+    // Refresh the menu so the new thumbnail shows next time the user opens
+    // it. Cheap if the menu is hidden; no flash.
+    renderWorldsList().catch(() => {});
+  } catch (err) {
+    console.warn("thumbnail generation failed:", err);
+  }
 }
 
 function setStatus(s) { hudStatus.textContent = s; }
@@ -609,6 +654,7 @@ async function checkRemoteUpdates() {
 async function refreshOneDriveStatus() {
   if (!isOneDriveConfigured()) {
     onedriveBar.classList.add("hidden");
+    menuToggleBadge.classList.add("hidden");
     return;
   }
   onedriveBar.classList.remove("hidden");
@@ -619,10 +665,14 @@ async function refreshOneDriveStatus() {
       onedriveStatus.textContent = `Signed in: ${account.username}`;
       onedriveSignIn.classList.add("hidden");
       onedriveSignOut.classList.remove("hidden");
+      menuToggleBadge.classList.add("hidden");
     } else {
       onedriveStatus.textContent = "Not signed in";
       onedriveSignIn.classList.remove("hidden");
       onedriveSignOut.classList.add("hidden");
+      // Show the orange dot on the hamburger — hints there's a sign-in
+      // action available inside, without putting sign-in UI in the main area.
+      menuToggleBadge.classList.remove("hidden");
     }
   } catch (err) {
     // MSAL bundle failed to load, init threw, etc. Leave the bar in its
@@ -723,7 +773,11 @@ async function renderWorldsList() {
   // Step 1: paint cached worlds immediately. Provider availability lookups
   // happen asynchronously below (one might be a slow Graph round-trip).
   worldsListEl.innerHTML = "";
-  for (const w of cached) appendWorldRow(w, false, token);
+  // Cleanup blob URLs from previous render to avoid memory leak.
+  for (const url of thumbnailUrls) URL.revokeObjectURL(url);
+  thumbnailUrls.length = 0;
+
+  for (const w of cached) appendWorldCard(w, false, token);
 
   // Step 2: per-provider, fetch the available list and append uncached entries
   // as each provider resolves. Errors surface in the inline error log, not
@@ -742,7 +796,7 @@ async function renderWorldsList() {
       if (token !== renderToken) return;
       for (const it of items) {
         if (cachedKey.has(`${p.source}:${it.remoteId}`)) continue;
-        appendWorldRow({
+        appendWorldCard({
           kind: "uncached",
           source: p.source,
           remoteId: it.remoteId,
@@ -753,14 +807,20 @@ async function renderWorldsList() {
   }
 }
 
-function appendWorldRow(w, uncached, token) {
+// Track blob URLs created for thumbnails so we can revoke them on re-render.
+// objectURLs leak GPU/main-thread memory until revoked; the cleanup above
+// handles it.
+const thumbnailUrls = [];
+
+function appendWorldCard(w, uncached, token) {
   if (token !== renderToken) return;
   const isCurrent =
     (w.id && w.id === current.id) ||
     (w.remoteId && w.source === current.source && w.remoteId === current.remoteId);
+
   const li = document.createElement("li");
   li.className =
-    "world-item" + (isCurrent ? " current" : "") + (uncached ? " uncached" : "");
+    "world-card" + (isCurrent ? " current" : "") + (uncached ? " uncached" : "");
   if (w.id) li.dataset.id = w.id;
   else {
     li.dataset.source = w.source;
@@ -768,22 +828,34 @@ function appendWorldRow(w, uncached, token) {
     li.dataset.worldName = w.name;
   }
 
+  // Thumbnail image (or placeholder via card background gradient).
+  if (w.thumbnail instanceof Blob) {
+    const img = document.createElement("img");
+    img.className = "world-thumb";
+    img.alt = "";
+    const url = URL.createObjectURL(w.thumbnail);
+    thumbnailUrls.push(url);
+    img.src = url;
+    li.appendChild(img);
+  }
+
+  // Source badges (top-left)
+  if (w.source === "bundled" || w.source === "onedrive") {
+    const badges = document.createElement("div");
+    badges.className = "world-badges";
+    const badge = document.createElement("span");
+    badge.className = "world-badge";
+    badge.textContent = w.source === "bundled" ? "default" : "onedrive";
+    badges.appendChild(badge);
+    li.appendChild(badges);
+  }
+
+  // Info overlay (bottom)
   const info = document.createElement("div");
   info.className = "world-info";
   const nameSpan = document.createElement("span");
   nameSpan.className = "world-name";
   nameSpan.textContent = w.name;
-  if (w.source === "bundled") {
-    const badge = document.createElement("span");
-    badge.className = "world-badge";
-    badge.textContent = "default";
-    nameSpan.appendChild(badge);
-  } else if (w.source === "onedrive") {
-    const badge = document.createElement("span");
-    badge.className = "world-badge";
-    badge.textContent = "onedrive";
-    nameSpan.appendChild(badge);
-  }
   info.appendChild(nameSpan);
 
   const metaSpan = document.createElement("span");
@@ -795,14 +867,14 @@ function appendWorldRow(w, uncached, token) {
       p.getSize(w.remoteId).then((size) => {
         if (token !== renderToken) return;
         metaSpan.textContent = size != null
-          ? `${formatBytes(size)} · not cached — tap to stream / ↓ to keep`
-          : "not cached — tap to stream / ↓ to keep";
+          ? `${formatBytes(size)} · tap to stream`
+          : "tap to stream";
       }).catch(() => {
         if (token !== renderToken) return;
-        metaSpan.textContent = "not cached — tap to stream / ↓ to keep";
+        metaSpan.textContent = "tap to stream";
       });
     } else {
-      metaSpan.textContent = "not cached — tap to stream / ↓ to keep";
+      metaSpan.textContent = "tap to stream";
     }
   } else {
     metaSpan.textContent =
@@ -811,45 +883,47 @@ function appendWorldRow(w, uncached, token) {
   info.appendChild(metaSpan);
   li.appendChild(info);
 
-  // Right-side action buttons. Buttons per source:
+  // Action buttons (bottom-right). Per source:
   //   uncached         → ↓ (download to cache)
   //   cached local     → × (delete permanently — no remote to recover from)
   //   cached bundled   → × (remove from cache, bundled source can be re-fetched)
   //   cached onedrive  → × (uncache) + 🗑 (delete from OneDrive too)
-  //   current          → none (can't act on the world you're inside)
-  if (uncached) {
-    const dl = document.createElement("button");
-    dl.className = "world-cache";
-    dl.type = "button";
-    dl.dataset.source = w.source;
-    dl.dataset.remoteId = w.remoteId;
-    dl.dataset.worldName = w.name;
-    dl.title = "Download for offline";
-    dl.textContent = "↓";
-    li.appendChild(dl);
-  } else if (w.id && !isCurrent) {
-    const del = document.createElement("button");
-    del.className = "world-delete";
-    del.type = "button";
-    del.dataset.id = w.id;
-    del.title = w.source === "local" ? "Delete world" : "Remove from cache";
-    del.textContent = "×";
-    li.appendChild(del);
+  //   current          → no buttons (can't act on the world you're inside)
+  if (uncached || (w.id && !isCurrent)) {
+    const actions = document.createElement("div");
+    actions.className = "world-actions";
+    if (uncached) {
+      const dl = document.createElement("button");
+      dl.className = "world-action world-cache";
+      dl.type = "button";
+      dl.dataset.source = w.source;
+      dl.dataset.remoteId = w.remoteId;
+      dl.dataset.worldName = w.name;
+      dl.title = "Download for offline";
+      dl.textContent = "↓";
+      actions.appendChild(dl);
+    } else {
+      const del = document.createElement("button");
+      del.className = "world-action world-delete danger";
+      del.type = "button";
+      del.dataset.id = w.id;
+      del.title = w.source === "local" ? "Delete world" : "Remove from cache";
+      del.textContent = "×";
+      actions.appendChild(del);
 
-    // OneDrive worlds get a second button for full remote delete. We don't
-    // collapse uncache+delete into one button because they have different
-    // blast radius — losing the local copy is recoverable from OneDrive,
-    // losing OneDrive is permanent.
-    if (w.source === "onedrive") {
-      const delRemote = document.createElement("button");
-      delRemote.className = "world-delete-remote";
-      delRemote.type = "button";
-      delRemote.dataset.id = w.id;
-      delRemote.title = "Delete from OneDrive";
-      delRemote.textContent = "🗑";
-      li.appendChild(delRemote);
+      if (w.source === "onedrive") {
+        const delRemote = document.createElement("button");
+        delRemote.className = "world-action world-delete-remote danger-strong";
+        delRemote.type = "button";
+        delRemote.dataset.id = w.id;
+        delRemote.title = "Delete from OneDrive";
+        delRemote.textContent = "🗑";
+        actions.appendChild(delRemote);
+      }
     }
+    li.appendChild(actions);
   }
+
   worldsListEl.appendChild(li);
 }
 

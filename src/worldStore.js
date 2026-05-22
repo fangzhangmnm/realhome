@@ -156,6 +156,17 @@ export async function updateRemoteSync(id, blob, etag, opts = {}) {
   await reqP(store.put(r));
 }
 
+// Save a thumbnail Blob onto an existing record. Called lazily by the
+// thumbnail pipeline — cards render with a placeholder while the renderer
+// catches up in the background, then this swap-in fires + the UI re-renders.
+export async function setThumbnail(id, blob) {
+  const store = await tx("readwrite");
+  const r = await reqP(store.get(id));
+  if (!r) return;
+  r.thumbnail = blob;
+  await reqP(store.put(r));
+}
+
 export async function deleteWorld(id) {
   const store = await tx("readwrite");
   await reqP(store.delete(id));
