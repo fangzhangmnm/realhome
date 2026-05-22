@@ -41,6 +41,41 @@ button {
 }
 .overlay.hidden { opacity: 0; pointer-events: none; }
 
+/* ── XR DOM-overlay mode ───────────────────────────────────────────────────
+   When Quest grants dom-overlay, #startOverlay is rendered into the XR
+   view by the compositor. CSS still applies; tweak for legibility from
+   ~1.5m viewing distance and to keep the world visible behind the menu.
+
+   Quest typically renders dom-overlay as a head-locked 2D plane. Text
+   that's comfortable at desk distance (13-14px) is harder to read at
+   headset distance — bump base sizes. Same DOM, same SSoT. */
+body.xr-active.xr-dom-overlay .overlay {
+  /* Quest's compositor already darkens / blurs the world for us via the
+     headset display. Don't double up — lighter backdrop so the user can
+     glance past the menu. */
+  background: rgba(11, 13, 16, 0.55);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+body.xr-active.xr-dom-overlay .brand { font-size: 24px; }
+body.xr-active.xr-dom-overlay .top-button { font-size: 15px; padding: 10px 18px; }
+body.xr-active.xr-dom-overlay .top-icon { width: 48px; height: 48px; }
+body.xr-active.xr-dom-overlay .top-icon svg { width: 22px; height: 22px; }
+body.xr-active.xr-dom-overlay .worlds-grid {
+  /* Bigger cards: easier laser-pointer targets, more legible at distance */
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 18px;
+}
+body.xr-active.xr-dom-overlay .world-name { font-size: 15px; }
+body.xr-active.xr-dom-overlay .world-meta { font-size: 12.5px; }
+body.xr-active.xr-dom-overlay .world-action {
+  /* Controller-laser targeting needs more forgiving hitboxes */
+  width: 36px;
+  height: 36px;
+  font-size: 16px;
+}
+body.xr-active.xr-dom-overlay .hints { font-size: 13px; }
+
 /* ── Top bar ───────────────────────────────────────────────────────────── */
 .top-bar {
   display: flex;

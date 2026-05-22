@@ -82,8 +82,21 @@ function tryLock() {
 // Fire requestSession synchronously inside the user gesture. World swap (if any)
 // happens in parallel; VR enters showing the current scene, new scene cuts in
 // once parsed.
+//
+// dom-overlay (optional): request that Quest's compositor render
+// #startOverlay (and any other DOM that's on top of the canvas) as a 2D
+// surface inside the XR view, so the user can keep using the regular HTML
+// menu while in immersive-vr. Browser may refuse — we log session.
+// domOverlayState on start so we can see whether it was granted.
+//
+// Why "optional": if Quest's WebXR runtime doesn't support it OR the user's
+// browser version is too old, the session must still start. If it's
+// "required" and the runtime refuses, requestSession rejects.
 function enterVR() {
-  navigator.xr.requestSession("immersive-vr", { optionalFeatures: ["local-floor"] })
+  navigator.xr.requestSession("immersive-vr", {
+    optionalFeatures: ["local-floor", "dom-overlay"],
+    domOverlay: { root: document.getElementById("startOverlay") },
+  })
     .then((session) => renderer.xr.setSession(session))
     .catch((err) => console.error("VR session failed:", err));
 }
@@ -112,14 +125,36 @@ document.addEventListener("keydown", (e) => {
   if (overlay.classList.contains("hidden")) return;
   tryLock();
 });
+// Track whether the current XR session granted dom-overlay. When granted,
+// we keep #startOverlay visible (Quest's compositor draws it inside the
+// XR view) so the user can pick a different world without leaving VR.
+// When NOT granted, hide the overlay — the DOM is invisible in immersive
+// anyway, and Quest's "running in background" panel takes over.
+let xrDomOverlayGranted = false;
 renderer.xr.addEventListener("sessionstart", () => {
-  overlay.classList.add("hidden");
+  const session = renderer.xr.getSession();
+  // domOverlayState is the canonical way to check whether the browser
+  // honored our request. type is "screen" (the dom-overlay spec uses this
+  // for AR phone-as-window AND VR head-locked overlay).
+  xrDomOverlayGranted = !!session?.domOverlayState;
+  document.body.classList.toggle("xr-active", true);
+  document.body.classList.toggle("xr-dom-overlay", xrDomOverlayGranted);
+  if (xrDomOverlayGranted) {
+    // Overlay stays visible — Quest paints it into the XR view.
+    logError("xr:overlay", `dom-overlay granted (type=${session.domOverlayState.type})`);
+  } else {
+    overlay.classList.add("hidden");
+    logError("xr:overlay", "dom-overlay NOT granted — exit VR to switch worlds");
+  }
   // First XR frame (not this event) is when camera.position reflects the
   // real HMD pose — defer the reset to the animation loop where we can read
   // it and capture tracking_origin correctly.
 });
 renderer.xr.addEventListener("sessionend", () => {
+  document.body.classList.remove("xr-active", "xr-dom-overlay");
+  xrDomOverlayGranted = false;
   overlay.classList.remove("hidden");
+  clearError("xr:overlay");
   checkRemoteUpdates();
 });
 
@@ -192,7 +227,7 @@ worldsListEl.addEventListener("click", async (e) => {
   if (deleteRemoteBtn) { await handleDeleteRemote(deleteRemoteBtn.dataset.id); return; }
   const deleteBtn = e.target.closest(".world-delete");
   if (deleteBtn) { await handleDelete(deleteBtn.dataset.id); return; }
-  const item = e.target.closest(".world-item");
+  const item = e.target.closest(".world-card");
   if (item) await handleEnter(item);
 });
 
@@ -391,7 +426,7 @@ async function switchToWorld(id) {
   try {
     const record = await getWorld(id);
     if (!record || !record.blob) throw new Error("world not found");
-    loadingPanel.show("Loading", record.name, -1);
+    showLoading("Loading", record.name, -1);
     const result = await loadGlbFromBlob(record.blob, record.name);
     await touchWorld(id);
     current.id = id;
@@ -405,7 +440,7 @@ async function switchToWorld(id) {
     setStatus("load failed");
     logError(`load:${id}`, `load failed: ${err.message || err}`);
   } finally {
-    loadingPanel.hide();
+    hideLoading();
     loading = false;
   }
 }
@@ -418,7 +453,7 @@ async function streamOpenWorld(source, remoteId, name) {
   loading = true;
   setStatus("loading…");
   hudName.textContent = name;
-  loadingPanel.show("Downloading", name, 0);
+  showLoading("Downloading", name, 0);
   try {
     const p = providers.find((p) => p.source === source);
     if (!p) throw new Error(`no provider for ${source}`);
@@ -427,10 +462,10 @@ async function streamOpenWorld(source, remoteId, name) {
       const det = total > 0
         ? `${name} · ${formatBytes(loaded)} / ${formatBytes(total)}`
         : `${name} · ${formatBytes(loaded)}`;
-      loadingPanel.update("Downloading", det, f);
+      updateLoading("Downloading", det, f);
     });
     if (!result) throw new Error("source unavailable");
-    loadingPanel.update("Loading", name, -1);
+    updateLoading("Loading", name, -1);
     const parsed = await loadGlbFromBlob(result.blob, name);
     current.id = null;
     current.source = source;
@@ -443,7 +478,7 @@ async function streamOpenWorld(source, remoteId, name) {
     setStatus("load failed");
     logError(`stream:${source}:${remoteId}`, `${name}: ${err.message || err}`);
   } finally {
-    loadingPanel.hide();
+    hideLoading();
     loading = false;
   }
 }
@@ -508,6 +543,32 @@ async function maybeGenerateThumbnail(id) {
 }
 
 function setStatus(s) { hudStatus.textContent = s; }
+
+// Unified loading display. Picks the right render target:
+//   - flat / no XR  → DOM #progressBar (existing showProgress/hideProgress)
+//   - XR + dom-overlay  → DOM #progressBar (still visible inside overlay)
+//   - XR + NO dom-overlay → 3D loadingPanel parented to camera
+// Single SSoT: callers don't know or care which path renders.
+function showLoading(label, detail = "", fraction = -1) {
+  if (renderer.xr.isPresenting && !xrDomOverlayGranted) {
+    loadingPanel.show(label, detail, fraction);
+  } else {
+    const text = detail ? `${label} — ${detail}` : label;
+    showProgress(text, fraction);
+  }
+}
+function updateLoading(label, detail, fraction) {
+  if (renderer.xr.isPresenting && !xrDomOverlayGranted) {
+    loadingPanel.update(label, detail, fraction);
+  } else {
+    const text = detail ? `${label} — ${detail}` : label;
+    showProgress(text, fraction);
+  }
+}
+function hideLoading() {
+  loadingPanel.hide();
+  hideProgress();
+}
 
 // Persistent error log shown inline in the menu. setStatus() is ephemeral
 // (overwritten by next op); logError() entries stay until the user dismisses.
