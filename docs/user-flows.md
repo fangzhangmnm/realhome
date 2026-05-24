@@ -62,15 +62,13 @@ Transitions:
 | **InWorld** | Immersive-VR session. Headset shows stereo render. Quest's docked browser panel shows "running in background" placeholder. | Right thumbstick → walk + snap-turn. Trigger / face button → jump. |
 
 Transitions:
-- Menu → InWorld: tap a world card → enter VR session (gesture-driven). World loads in-session (loading panel parented to camera is visible).
+- Menu → InWorld: tap a world card → world loads in menu state (DOM progress bar visible) → enter VR session (gesture-driven; or enter-prompt fallback if load was slow). See [docs/world-transitions.md](world-transitions.md).
 - InWorld → Menu: Meta button → quit XR session. Quest returns to 2D browser panel where the menu was.
 
 **Limitation:** the menu is NOT visible during an immersive-vr session.
 To switch worlds, change settings, or sign in to OneDrive, the user must
 exit VR via the Meta button, do the action in the 2D menu, then tap a
 card to re-enter VR. See "Why no in-VR menu" below.
-
-## Transitions in detail
 
 ## Artist-side conventions
 
@@ -166,29 +164,12 @@ on purpose, see `docs/msal-onedrive-patterns.md` pattern 5.
 
 ## Why no in-VR menu (decision log)
 
-Tried Quest Browser's WebXR `dom-overlay` feature on 2026-05-22 — the
-overlay didn't render in immersive-vr (the optional feature didn't seem
-to be granted, or was granted but invisible). dom-overlay is primarily
-specced for handheld AR and Quest doesn't seem to support it for
-immersive-vr in current builds.
-
-Other approaches considered and rejected:
-- **Native three.js panels** (3D cards built from primitives) — would
-  reinvent a UI toolkit. Two SSoTs (HTML menu + 3D menu) to maintain.
-- **HTMLMesh** (rasterize the DOM onto a 3D plane via canvas) — keeps
-  SSoT but floats free of the docking panel, would feel like a "second
-  HUD" alongside Quest's already-present "running in background" panel.
-
-So the decision: accept that in VR, the menu requires exiting the
-session via Meta button. The penalty is one extra ceremony per world-
-switch. Once we have the 3D loading panel covering the transition (which
-we do), the immersive-mode UX feels intentional.
-
-If Quest browser ever ships proper dom-overlay support for
-immersive-vr, the path back is: re-add the `dom-overlay` optionalFeature
-to enterVR (was removed on 2026-05-22), test, ship. The
-`showLoading`/`hideLoading` dispatcher already has the `xrDomOverlayGranted`
-branch; just flip it back on.
+See [docs/ui-layers.md](ui-layers.md) "In-VR menu: decided to defer"
+for the full rationale. Short version: dom-overlay didn't work on
+Quest, HTMLMesh would feel like a floating "second HUD" next to
+Quest's docking panel, and native 3D panels would create a second
+SSoT (rejected on principle — see [docs/principles.md](principles.md)
+rule 1).
 
 ## What lives in the menu vs in-world
 
@@ -230,16 +211,16 @@ branch; just flip it back on.
 - **Per-world rename + custom thumbnail** — would need text input UX,
   drawer-level form.
 - **Cancel loading** — would need an AbortController plumbed through
-  provider.fetch. UX: a cancel button on the loading panel (visible in
-  both flat DOM #progressBar and the 3D loadingPanel).
+  provider.fetch. UX: a cancel button on the DOM #progressBar.
 - **Multi-room synced world** — way past v1; would need a WebRTC layer.
 
 ## Files
 
 - [src/app.js](../src/app.js) — event wiring, state transitions
-- [src/loadingPanel.js](../src/loadingPanel.js) — 3D loading indicator
 - [src/styles.css](../src/styles.css) — Menu / Drawer / Loading visuals
 - [index.html](../index.html) — DOM layout
 - [docs/ui-layers.md](ui-layers.md) — rendering-mode details (flat vs VR plumbing)
+- [docs/world-transitions.md](world-transitions.md) — load order, user-gesture, enter-prompt
 - [docs/sync-strategies.md](sync-strategies.md) — OneDrive sync rules
 - [docs/vr-locomotion.md](vr-locomotion.md) — 3-layer VR rig
+- [docs/principles.md](principles.md) — cross-cutting rules driving the design

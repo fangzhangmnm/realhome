@@ -27,20 +27,23 @@ instead of the canvas; the user only sees stereo through the headset.
 ## What that means for the menu
 
 Anything we want the VR user to see while in-XR MUST live in the 3D
-scene. Three pieces apply:
+scene. Currently:
 
-1. **Loading indicator** ([src/loadingPanel.js](../src/loadingPanel.js))
-   — a 9999-renderOrder textured plane parented to the camera. Visible in
-   flat AND VR. Painted via Canvas2D into a CanvasTexture, animated dots
-   + progress bar. Drawn over any world geometry near the camera; the
-   skybox still paints under it.
+1. **Vignette** ([src/vignette.js](../src/vignette.js)) — a shader-
+   painted ring attached to the camera, modulated by
+   `vignette.update(amount, dt)`. The only persistent in-scene UI.
 
-2. **Vignette** ([src/vignette.js](../src/vignette.js)) — same idea, a
-   shader-painted ring attached to the camera. Always in the scene, just
-   modulated by `vignette.update(amount, dt)`.
+2. **HUD text** — DOM only. Invisible during XR.
 
-3. **HUD text** — currently DOM only. Becomes invisible the moment XR
-   starts. Should migrate to a textured plane if we want it in VR.
+3. **Loading indicator** — DOM `#progressBar`. Visible during load
+   because loads now happen in menu state (before XR session starts).
+   See [docs/world-transitions.md](world-transitions.md).
+
+Earlier iterations had a 3D `loadingPanel.js` (camera-anchored canvas
+texture) for showing progress mid-XR session. Once the world-load flow
+moved to "load first, then enter XR," the 3D panel was never visible
+(user is in DOM menu during load) and got deleted. Single render path
+for loading.
 
 ## The Quest "running in background" panel — what it shows
 
@@ -73,40 +76,39 @@ installWorld so the Quest panel header reads cleanly.
 
 ## In-VR menu: decided to defer
 
-We tried `dom-overlay` on Quest browser (2026-05-22) and it didn't render
-in immersive-vr. The user-facing flow is now documented as
-"exit VR → use menu → re-enter VR" — see [docs/user-flows.md](user-flows.md).
+We tried `dom-overlay` on Quest browser — it didn't render in
+immersive-vr. dom-overlay is primarily specced for handheld AR and
+Quest doesn't seem to honor it for immersive-vr in current builds.
 
-The three approaches we considered before deferring (HTMLMesh, native
-three.js panels, dom-overlay) are described there in the "Why no in-VR
-menu" decision log. If Quest browser ships proper dom-overlay support
-later, re-add the optionalFeature in `enterVR` and the
-`xrDomOverlayGranted` branch in showLoading; the rest of the wiring
-(body class, CSS hooks) is already prepared.
+Three approaches were considered:
+- **WebXR DOM Overlay** (preferred): browser composites our actual DOM
+  into the XR view. Same DOM = same SSoT. Failed because Quest doesn't
+  support it for VR.
+- **HTMLMesh** (acceptable fallback): rasterize DOM onto a 3D plane
+  via canvas. Single SSoT preserved, but the plane floats free of
+  Quest's docking panel ("乱飘"). Not pursued.
+- **Native three.js panels** (rejected): build 3D cards / buttons /
+  sliders from primitives. Would reinvent a UI toolkit and create a
+  second SSoT (HTML menu + 3D menu in parallel). User explicitly
+  rejected on SSoT grounds.
 
-## Loading indicator — current state
+Decision: accept that in VR, switching worlds / changing settings
+requires exiting via Meta button. Penalty is one extra ceremony per
+world-switch. Mitigated by document.title showing the world name in
+Quest's "running in background" panel header.
 
-In-scene, always visible regardless of mode. Driven by `loadingPanel.show
-/ update / hide` from app.js around `switchToWorld` and `streamOpenWorld`.
-Animated even while XR — the requestAnimationFrame ticks at headset frame
-rate during a session.
-
-The user can cancel uncached downloads. **Not yet implemented**: would
-require:
-- AbortController plumbed through `provider.fetch` → `graphFetch` →
-  underlying `fetch()`
-- "Cancel" button on the loading panel (3D button per Approach C — TBD)
-- Wiring abort signal cleanup paths in streamOpenWorld / cacheWorld
-
-Acceptable to defer until controller raycasting is in.
+Path back if Quest ever ships proper dom-overlay support: re-add the
+`"dom-overlay"` optionalFeature in `enterVR()` with
+`domOverlay: { root: document.getElementById("startOverlay") }`. CSS
+hooks (body.xr-active class) are still there.
 
 ## Files
 
-- [src/loadingPanel.js](../src/loadingPanel.js) — the in-scene loading
-  panel (mode-agnostic)
-- [src/vignette.js](../src/vignette.js) — the in-scene vignette (mode-
-  agnostic)
+- [src/vignette.js](../src/vignette.js) — the in-scene vignette
 - [src/app.js](../src/app.js) — DOM event wiring, mostly relevant in
   flat mode
-- [docs/vr-locomotion.md](vr-locomotion.md) — 3-layer rig model the
-  in-VR menu will need to align with
+- [docs/vr-locomotion.md](vr-locomotion.md) — 3-layer rig model
+- [docs/world-transitions.md](world-transitions.md) — why the menu is
+  the only loading surface
+- [docs/principles.md](principles.md) — the SSoT rule that closed the
+  in-VR menu door
