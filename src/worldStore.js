@@ -278,6 +278,65 @@ export async function getUsage() {
   return { usage: usage || 0, quota: quota || 0 };
 }
 
+// ── LRU eviction for unpinned records ────────────────────────────────────
+//
+// Per docs/sync-constraints.md constraint #2: Top + High protection levels
+// are `pinned=true` and MUST NOT be auto-evicted. Medium-level records
+// (auto-sync caches, future public-source caches that the user didn't
+// explicitly ↓) are pinned=false and may be evicted when storage
+// pressure rises.
+//
+// "Eviction" here means: drop the blob (and thumbnail), keep the
+// metadata row. Next access re-fetches. We don't delete the row entirely
+// because (a) keeping the row preserves freshness state (remoteEtag,
+// lastSyncedAt) and (b) the user might have arranged the menu around it.
+//
+// In RealHome v1 NO records are unpinned (everything is user-uploaded or
+// user-↓-cached, both pinned by default). This function exists so the
+// public-source code we add later just works, and so we can audit
+// "what would be evictable" up-front.
+
+// Drop blob + thumbnail to free space. Keeps the metadata row.
+async function evictRecord(id) {
+  const store = await tx("readwrite");
+  const r = await reqP(store.get(id));
+  if (!r) return 0;
+  const freed = (r.byteLength || 0) + (r.thumbnail?.size || 0);
+  r.blob = null;
+  r.byteLength = 0;
+  r.thumbnail = null;
+  await reqP(store.put(r));
+  return freed;
+}
+
+// Try to free at least `bytesToFree` of unpinned cache. Returns bytes freed.
+// Walks unpinned records in lastVisitedAt ascending (oldest first) and
+// drops their blobs until target met or no more candidates.
+// Pinned records (user uploads, user ↓-caches) are never touched.
+export async function evictUnpinnedLRU(bytesToFree) {
+  if (!Number.isFinite(bytesToFree) || bytesToFree <= 0) return 0;
+  const all = await listWorlds();
+  const candidates = all
+    .filter((w) => !w.pinned && w.blob)
+    .sort((a, b) => (a.lastVisitedAt || 0) - (b.lastVisitedAt || 0));
+  let freed = 0;
+  for (const w of candidates) {
+    if (freed >= bytesToFree) break;
+    freed += await evictRecord(w.id);
+  }
+  return freed;
+}
+
+// Diagnostic: how much room would LRU eviction find? Useful for the
+// settings UI ("X MB freeable") and for deciding whether to surface a
+// quota warning (vs cheerfully evicting in the background).
+export async function getEvictableBytes() {
+  const all = await listWorlds();
+  return all
+    .filter((w) => !w.pinned && w.blob)
+    .reduce((s, w) => s + (w.byteLength || 0) + (w.thumbnail?.size || 0), 0);
+}
+
 // Request "persistent" storage so the browser won't evict our IndexedDB under
 // disk pressure. On installed PWAs this is usually auto-granted silently;
 // on a regular browser tab it may prompt. Idempotent — safe to call on every boot.

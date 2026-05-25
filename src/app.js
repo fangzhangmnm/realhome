@@ -16,6 +16,7 @@ import {
   applySyncPatch,
   isTombstoned, insertTombstone, deleteTombstone,
   hasEverSignedIn, markSignedIn,
+  getUsage, getEvictableBytes, evictUnpinnedLRU,
 } from "./worldStore.js";
 import { providers, getProvider } from "./providers.js";
 import { isOneDriveConfigured, SEATED_BUMP_M } from "./config.js";
@@ -1034,6 +1035,12 @@ async function bootstrap() {
   await renderWorldsList();
   checkRemoteUpdates();
 
+  // Quota check (constraint #2). If we're over 90% AND eviction would
+  // free meaningful space → quietly evict the oldest unpinned. If we're
+  // over 90% AND nothing is evictable (everything is pinned user data),
+  // surface the warning — only the user can free space via Clean cache.
+  checkStorageQuota().catch(() => {});
+
   // Kick off MSAL init in the background. When it resolves and we have an
   // active account:
   //   - refresh the sign-in bar
@@ -1083,6 +1090,34 @@ async function bootstrap() {
   }
 }
 
+// Storage pressure check — see constraint #2 ("pinned data never auto-
+// evicts"). Three tiers:
+//   < 90%   : nothing to do
+//   >= 90% AND something is unpinned : evict oldest unpinned silently
+//   >= 90% AND everything is pinned  : surface a warning so the user
+//                                       can Clean cache or × specific
+//                                       worlds. We CANNOT silently delete
+//                                       their pinned data.
+async function checkStorageQuota() {
+  const { usage, quota } = await getUsage();
+  if (!quota || usage / quota < 0.9) return;
+  const evictable = await getEvictableBytes();
+  if (evictable > 0) {
+    // Silent freeing — aim to bring usage to 70% by evicting unpinned.
+    const target = usage - quota * 0.7;
+    const freed = await evictUnpinnedLRU(target);
+    console.log(`storage pressure: freed ${formatBytes(freed)} unpinned`);
+    renderWorldsList().catch(() => {});
+    return;
+  }
+  // All pinned — surface to user. The errorLog is the right channel
+  // here (it persists in the menu and the user can dismiss).
+  logError("storage:full",
+    `Local storage is ${Math.round(usage / quota * 100)}% full (${formatBytes(usage)} of ${formatBytes(quota)}). ` +
+    `Everything cached is pinned (your uploads / your manual ↓). ` +
+    `Use Clean cache or × specific worlds to free space.`);
+}
+
 // Retry triggers for pendingUpload — per constraint #4 / P1.4 these are
 // the event-driven opportunities (no polling).
 window.addEventListener("online", () => {
@@ -1120,16 +1155,29 @@ async function renderWorldsList() {
   // as each provider resolves. Errors surface in the inline error log, not
   // console-only. Each provider gets its own try/catch — one provider's
   // failure doesn't block the others.
+  //
+  // For network-backed providers (OneDrive) we drop a placeholder spinner
+  // card so the user sees something is happening — otherwise the menu just
+  // looks idle for the seconds a Graph round-trip takes. CSS delays the
+  // fade-in 200ms so fast resolves (bundled, cached Graph) don't flash.
   for (const p of providers) {
+    const needsNetwork = p.source !== "bundled";
+    let placeholder = null;
+    if (needsNetwork) {
+      placeholder = createSourceLoadingCard(p.source);
+      worldsListEl.appendChild(placeholder);
+    }
     (async () => {
       let items;
       try {
         items = await p.list();
         clearError(`provider:${p.source}:list`);
       } catch (err) {
+        placeholder?.remove();
         logError(`provider:${p.source}:list`, `${p.source}: ${err.message || err}`);
         return;
       }
+      placeholder?.remove();
       if (token !== renderToken) return;
       for (const it of items) {
         if (cachedKey.has(`${p.source}:${it.remoteId}`)) continue;
@@ -1156,6 +1204,26 @@ async function renderWorldsList() {
 // objectURLs leak GPU/main-thread memory until revoked; the cleanup above
 // handles it.
 const thumbnailUrls = [];
+
+// Loading placeholder card. CSS gives it a 200ms fade-in delay so providers
+// that resolve quickly (already-cached Graph response, etc.) don't cause a
+// visual flash. Removed by renderWorldsList when the provider resolves.
+function createSourceLoadingCard(source) {
+  const li = document.createElement("li");
+  li.className = "world-card world-loading-placeholder";
+  li.setAttribute("aria-busy", "true");
+  const spinner = document.createElement("div");
+  spinner.className = "world-loading-spinner";
+  const label = document.createElement("div");
+  label.className = "world-loading-label";
+  label.textContent =
+    source === "onedrive" ? "Loading OneDrive…" :
+    source === "bundled"  ? "Loading bundled…" :
+    `Loading ${source}…`;
+  li.appendChild(spinner);
+  li.appendChild(label);
+  return li;
+}
 
 function appendWorldCard(w, uncached, token) {
   if (token !== renderToken) return;

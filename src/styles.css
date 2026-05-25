@@ -258,6 +258,41 @@ button {
   color: #fff;
 }
 
+/* Loading placeholder card (network-backed provider list in flight).
+   Fade-in is delayed 200ms so a fast resolve never causes a visual flash. */
+.world-loading-placeholder {
+  cursor: default;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(232, 214, 168, 0.04);
+  border: 1px dashed rgba(232, 214, 168, 0.18);
+  color: rgba(232, 214, 168, 0.65);
+  font-size: 12px;
+  opacity: 0;
+  animation: world-loading-fadein 0.3s ease 0.2s forwards;
+}
+.world-loading-placeholder:hover { background: rgba(232, 214, 168, 0.04); }
+.world-loading-spinner {
+  width: 26px;
+  height: 26px;
+  border: 2px solid rgba(232, 214, 168, 0.18);
+  border-top-color: rgba(232, 214, 168, 0.85);
+  border-radius: 50%;
+  animation: world-loading-spin 0.9s linear infinite;
+}
+.world-loading-label {
+  letter-spacing: 0.02em;
+}
+@keyframes world-loading-fadein {
+  to { opacity: 1; }
+}
+@keyframes world-loading-spin {
+  to { transform: rotate(360deg); }
+}
+
 /* Bottom info overlay — name + meta */
 .world-info {
   position: absolute;
