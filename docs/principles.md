@@ -209,32 +209,8 @@ If size becomes a problem later: do it server-side (artist's
 build pipeline, OneDrive ingest hook, whatever). Don't make every
 client redo the same work on every cache.
 
-## 11. Documentation goes in `./docs/`, not in the code
+## Validation note
 
-The user actively reads + edits these docs. Per-file comments stay
-short and focused on "why this code looks weird"; design rationale +
-decision logs go to dedicated docs.
-
-This file is for cross-cutting rules. Per-system rules go in
-`vr-locomotion.md`, `jump-and-collision.md`, etc.
-
-## 12. Journals are human-only
-
-`./journals/` is the user's personal thinking space. Never write
-files there. Never edit existing ones. This is in the user's saved
-feedback memory.
-
-## What this list is NOT
-
-- **Not a code style guide.** No "tabs vs spaces" here. Code style
-  follows whatever the codebase already does.
-- **Not a feature TODO.** Specific features live in `user-flows.md` →
-  "Future flows" or in issue-tracker-like notes.
-- **Not exhaustive.** Just the rules that actually came up. New
-  projects might surface different ones.
-
-## Files
-
-- All the topical docs in this folder elaborate specific rules
-- [docs/user-flows.md](user-flows.md) — what the user actually does
-- [docs/sync-strategies.md](sync-strategies.md) — sync rule selection
+Each principle above is supported by something we built (or built then
+removed) in this project — not a "what I think might be good." If a
+principle stops being demonstrated by the code, take it off the list.

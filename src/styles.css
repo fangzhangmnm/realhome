@@ -243,6 +243,20 @@ button {
   backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
 }
+/* Sync-state badges — semantic colors so user can tell at a glance. */
+.world-badge-pending {
+  background: rgba(80, 130, 200, 0.85);
+  color: #fff;
+}
+.world-badge-deferred {
+  background: rgba(11, 13, 16, 0.65);
+  color: rgba(232, 214, 168, 0.55);
+  font-style: italic;
+}
+.world-badge-ghost {
+  background: rgba(200, 110, 90, 0.85);
+  color: #fff;
+}
 
 /* Bottom info overlay — name + meta */
 .world-info {

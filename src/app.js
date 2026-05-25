@@ -13,8 +13,11 @@ import {
   clearAllWorlds, clearAllSettings,
   setThumbnail,
   getSetting, setSetting,
+  applySyncPatch,
+  isTombstoned, insertTombstone, deleteTombstone,
+  hasEverSignedIn, markSignedIn,
 } from "./worldStore.js";
-import { providers } from "./providers.js";
+import { providers, getProvider } from "./providers.js";
 import { isOneDriveConfigured, SEATED_BUMP_M } from "./config.js";
 
 // Detected at boot: is this user agent capable of immersive-vr sessions?
@@ -104,6 +107,7 @@ flat.controls.addEventListener("lock", () => overlay.classList.add("hidden"));
 flat.controls.addEventListener("unlock", () => {
   overlay.classList.remove("hidden");
   checkRemoteUpdates();           // re-poll sources every time the menu reappears
+  flushPendingUploads().catch(() => {});
 });
 // Esc closes the menu too (just like clicking outside): when the overlay is
 // visible and we're not in XR, hitting Esc re-locks pointer + hides the menu.
@@ -130,6 +134,7 @@ renderer.xr.addEventListener("sessionend", () => {
   document.body.classList.remove("xr-active");
   overlay.classList.remove("hidden");
   checkRemoteUpdates();
+  flushPendingUploads().catch(() => {});
 });
 
 // --- Settings drawer (right slide-in) ---
@@ -148,14 +153,33 @@ menuClose.addEventListener("click", (e) => { e.stopPropagation(); closeDrawer();
 menuBackdrop.addEventListener("click", closeDrawer);
 
 // --- Clean cache (OneDrive-style "remove local copies") ---
+// Itemized clean-cache (constraint #2). Counts what's about to vanish at
+// each protection level so the user can decide. Default action = cancel.
 cleanCacheButton.addEventListener("click", async (e) => {
   e.stopPropagation();
-  const ok = confirm(
-    "Clean cache?\n\n" +
-    "All cached worlds will be removed.\n" +
-    "Bundled / synced worlds will reappear in the list as available.\n" +
-    "Local uploads will be lost."
+  const all = await listWorlds();
+  const local = all.filter((w) => w.source === "local");
+  const pendingCount = all.filter((w) => w.pendingUpload && !w.uploadDeferred).length;
+  const cloud = all.filter((w) => w.source === "onedrive");
+  const bundled = all.filter((w) => w.source === "bundled");
+  const fmt = (arr) => arr.length
+    ? `${arr.length} (${formatBytes(arr.reduce((s, w) => s + (w.byteLength || 0), 0))})`
+    : "0";
+  const lines = [
+    "Clean ALL local cache?",
+    "",
+    `  • Local-only worlds: ${fmt(local)} ⚠ NOT recoverable`,
+  ];
+  if (pendingCount > 0) {
+    lines.push(`    └ ${pendingCount} not yet uploaded to OneDrive — those bytes will be lost`);
+  }
+  lines.push(
+    `  • OneDrive cached worlds: ${fmt(cloud)} (re-downloadable when online)`,
+    `  • Bundled cached worlds: ${fmt(bundled)} (re-cacheable)`,
+    "",
+    "All settings (tombstones, seated mode, ...) also reset.",
   );
+  const ok = confirm(lines.join("\n"));
   if (!ok) return;
   await clearAllWorlds();
   await clearAllSettings();
@@ -303,16 +327,24 @@ async function handleCache(source, remoteId, name, thumbnailRemoteId = null) {
   await renderWorldsList();
 }
 
+// × button. Local-cache delete only (does NOT touch the cloud). For
+// remote-backed records we write a tombstone pinned to the current etag
+// so the next mergeRemoteList won't silently re-discover and resurrect
+// the row — see docs/sync-constraints.md constraint #2 + etag-pinning.
+// A later cloud-side change to the same item (new etag) invalidates
+// the tombstone automatically (we re-discover the new version).
 async function handleDelete(id) {
   if (id === current.id) return;  // can't delete the currently-loaded world
   const record = await getWorld(id);
   if (!record) return;
-  // Local uploads have no remote source — deleting is permanent. Bundled /
-  // onedrive worlds simply uncache; they'll reappear in the list as available.
   const msg = record.source === "local"
     ? `Delete "${record.name}"?\n\nLocal uploads have no remote copy — this can't be undone.`
-    : `Remove "${record.name}" from cache?\n\nIt will reappear in the list as available, and can be re-cached anytime.`;
+    : `Remove "${record.name}" from cache?\n\nThe cloud copy stays; you can ↓ it again anytime. ` +
+      `Background sync won't re-add it as available until the cloud version changes.`;
   if (!confirm(msg)) return;
+  if (record.remoteId) {
+    await insertTombstone(record.source, record.remoteId, record.remoteEtag);
+  }
   await deleteWorld(id);
   await renderWorldsList();
 }
@@ -328,36 +360,40 @@ async function handleDeleteRemote(id) {
   if (!record || record.source !== "onedrive" || !record.remoteId) return;
   const ok = confirm(
     `Delete "${record.name}" from OneDrive?\n\n` +
-    `This removes the file from your OneDrive RealHome folder permanently. ` +
-    `Other devices that still have it cached will keep their local copy ` +
-    `until they refresh.\n\n` +
+    `This affects all your devices: the file will be removed from your ` +
+    `OneDrive RealHome folder permanently. Other devices that still have ` +
+    `it cached will keep their local copy until they refresh.\n\n` +
     `This can't be undone.`
   );
   if (!ok) return;
+  // Per constraint #2 / P1.10: cloud-delete failure aborts the whole op
+  // (don't pretend it's gone if it isn't). User retries when online.
+  const provider = getProvider(record.source);
   try {
-    const { deleteAppFolderItem } = await import("./onedriveGraph.js");
-    await deleteAppFolderItem(record.remoteId);
+    await provider.delete(record.remoteId);
   } catch (err) {
-    logError(`delete-remote:${record.remoteId}`, `OneDrive delete: ${err.message || err}`);
-    return;   // leave IDB record intact so the user can retry
+    logError(`delete-remote:${record.remoteId}`,
+      `OneDrive delete failed (try again when online): ${err.message || err}`);
+    return;
   }
+  // Defensive tombstone — if cloud delete propagation lags, this stops
+  // a fast follow-up mergeRemoteList from resurrecting the row.
+  await insertTombstone(record.source, record.remoteId, record.remoteEtag);
   await deleteWorld(id);
   await renderWorldsList();
 }
 
 // --- World loading paths ---
 //
-// loadFile is the local-side ingest path (file picker + drag/drop). After
-// optimize, if the user is signed in to OneDrive we attempt to upload the
-// blob to the AppFolder so it auto-syncs across devices:
-//   - filename collides in AppFolder → confirm overwrite. Cancel = save as
-//     local-only, no upload (file is still usable on THIS device).
-//   - upload fails for any other reason → save as local-only, surface the
-//     error in the log. Don't block the user from playing the world.
+// loadFile is the local-side ingest path (file picker + drag/drop). Per
+// constraint #4 (in-app upload semantics):
+//   - signed in at drag time → save locally + mark pendingUpload=true,
+//     push opportunistically. Retry across sessions until success.
+//   - NOT signed in → save locally, NO pendingUpload (consent doesn't
+//     extrapolate to "push to whatever cloud I might add later").
 //
-// Outcome:
-//   - success path → IDB record has source="onedrive" + remoteId + remoteEtag
-//   - cancel or upload failure → IDB record has source="local", no remote
+// Either way: world is immediately playable from IDB. The push runs in
+// background via flushPendingUploads.
 async function loadFile(file) {
   if (loading) return;
   if (!/\.(glb|gltf)$/i.test(file.name)) { setStatus("not a .glb/.gltf"); return; }
@@ -365,97 +401,172 @@ async function loadFile(file) {
   hudName.textContent = file.name;
   showLoading("Loading", file.name, -1);
   try {
-    // We persist the file as-is — no optimize pass. The artist's Blender
-    // export is the authoritative bytes; trying to re-pack here gave hangs
-    // and tiny savings on real-world glbs. If we need a size win in the
-    // future, do it server-side / in the artist's pipeline, not at runtime.
     const finalBlob = file instanceof Blob ? file : new Blob([file], { type: "model/gltf-binary" });
     const result = await loadGlbFromBlob(finalBlob, file.name);
 
-    // OneDrive sync (best effort). Falls back to local-only on any failure
-    // or user cancel; in both cases the world is fully usable from IDB.
-    const onedriveResult = await maybeUploadToOneDrive(file.name, finalBlob);
-
-    const record = await addWorld(finalBlob, file.name, onedriveResult
-      ? {
-          source: "onedrive",
-          remoteId: onedriveResult.remoteId,
-          remoteEtag: onedriveResult.etag,
-        }
-      : { source: "local" }
-    );
+    // Save first (pinned, source=local). pendingUpload flag depends on
+    // whether the user is signed in RIGHT NOW (their drag-time intent).
+    // Don't await account fetch on the critical path — guess via MSAL
+    // already-initialized state; flushPendingUploads will reconcile.
+    const signedIn = await isSignedInQuick();
+    const record = await addWorld(finalBlob, file.name, {
+      source: "local",
+      pinned: true,
+      pendingUpload: signedIn,
+    });
     current.id = record.id;
     current.source = record.source;
     current.remoteId = record.remoteId;
     installWorld(result, file.name);
-    setStatus(onedriveResult ? "synced to OneDrive" : "");
+    setStatus(signedIn ? "saved, uploading…" : "saved locally");
     await renderWorldsList();
+    if (signedIn) flushPendingUploads().catch(() => {});
   } catch (err) {
     console.error(err);
-    setStatus("upload failed");
-    logError(`upload:${file.name}`, `upload failed: ${err.message || err}`);
+    setStatus("save failed");
+    logError(`upload:${file.name}`, `save failed: ${err.message || err}`);
   } finally {
     hideLoading();
     loading = false;
   }
 }
 
-// Returns the upload result on success, or null if the user isn't signed
-// in, cancelled an overwrite prompt, or the upload failed. Failures (vs
-// cancel) are logged so the user knows why their file didn't sync — but
-// it's never fatal to the loadFile flow.
-async function maybeUploadToOneDrive(filename, blob) {
-  if (!isOneDriveConfigured()) return null;
-  let auth, graph, account;
+// Lightweight signed-in check used by drag-time intent. Doesn't kick off
+// MSAL init — if MSAL hasn't loaded, we report "not signed in" (which is
+// a safe default — won't auto-push to a cloud we can't reach anyway).
+async function isSignedInQuick() {
+  if (!isOneDriveConfigured()) return false;
   try {
-    auth = await import("./onedriveAuth.js");
-    graph = await import("./onedriveGraph.js");
-    account = await auth.getAccount();
-  } catch (err) {
-    console.warn("OneDrive modules unavailable, skipping upload:", err);
-    return null;
+    const { getAccount } = await import("./onedriveAuth.js");
+    return !!(await getAccount());
+  } catch {
+    return false;
   }
-  if (!account) return null;       // not signed in — silent fall-through
+}
 
-  // Pre-check for filename collision so we can ask the user before any
-  // bytes go up the wire. Chunked uploads in particular are bad at
-  // surfacing late conflicts.
+// Push one record to its provider's cloud. Used by flushPendingUploads.
+// Handles collision via three-option prompt (overwrite / rename / defer).
+// Returns one of: "ok" (record upgraded to source=onedrive), "deferred"
+// (user chose keep-local-don't-upload), "skip" (provider not available
+// right now, try again later), "fail" (logged the error).
+async function pushRecord(rec) {
+  if (!rec || !rec.blob || !rec.pendingUpload) return "skip";
+  // Where is this record going? If source is "local", it needs to migrate
+  // to the OneDrive source on success. If already "onedrive" (e.g. a
+  // retry after offline), keep current source.
+  const targetSource = rec.source === "local" ? "onedrive" : rec.source;
+  const provider = getProvider(targetSource);
+  if (!provider || typeof provider.upload !== "function") return "skip";
+  // Signed-in gate. flushPendingUploads also checks this before iterating
+  // but worth being defensive.
+  if (targetSource === "onedrive") {
+    try {
+      const { getAccount } = await import("./onedriveAuth.js");
+      if (!(await getAccount())) return "skip";
+    } catch { return "skip"; }
+  }
+
+  // Collision precheck — see constraint P1.6 ("default preserve both,
+  // not overwrite") and #7 ("surface duplicates, require rename").
   let existing = null;
   try {
-    existing = await graph.getAppFolderItemByName(filename);
+    existing = provider.getItemByName ? await provider.getItemByName(rec.name) : null;
   } catch (err) {
-    logError(`upload:${filename}`, `OneDrive precheck: ${err.message || err}`);
-    return null;
+    logError(`upload:${rec.name}`, `precheck: ${err.message || err}`);
+    return "fail";
   }
   let overwrite = false;
-  if (existing) {
-    const ok = confirm(
-      `"${filename}" already exists in your OneDrive RealHome folder.\n\n` +
-      `Overwrite it?\n\n` +
-      `Cancel keeps the file local-only on this device.`
+  let uploadName = rec.name;
+  if (existing && existing.remoteId !== rec.remoteId) {
+    // Three-option prompt. We use one confirm() (overwrite Y/N) and a
+    // follow-up confirm() (rename Y / skip N) for portability. A nicer
+    // modal UI is a future task.
+    const wantsOverwrite = confirm(
+      `"${rec.name}" already exists on OneDrive (modified ` +
+      `${existing.size ? formatBytes(existing.size) : "?"}).\n\n` +
+      `OK = overwrite the cloud version with your local copy.\n` +
+      `Cancel = keep both (you'll be asked how next).`
     );
-    if (!ok) return null;
-    overwrite = true;
+    if (wantsOverwrite) {
+      overwrite = true;
+    } else {
+      const rename = confirm(
+        `Upload as a renamed copy?\n\n` +
+        `OK = upload as "${rec.name.replace(/\.glb$/i, "")} (offline copy).glb"\n` +
+        `Cancel = keep this file local-only, don't upload (you can ↑ later)`
+      );
+      if (rename) {
+        uploadName = rec.name.replace(/\.glb$/i, " (offline copy).glb");
+      } else {
+        await applySyncPatch(rec.id, { pendingUpload: false, uploadDeferred: true });
+        return "deferred";
+      }
+    }
   }
 
-  showProgress(`Uploading ${filename} to OneDrive…`, 0);
+  showProgress(`Uploading ${uploadName} to OneDrive…`, 0);
   try {
-    const result = await graph.uploadItemToAppFolder(filename, blob, {
+    const result = await provider.upload(uploadName, rec.blob, {
       overwrite,
       onProgress: (loaded, total) => {
         const f = total > 0 ? loaded / total : -1;
         const label = total > 0
-          ? `Uploading ${filename}… ${formatBytes(loaded)} / ${formatBytes(total)}`
-          : `Uploading ${filename}… ${formatBytes(loaded)}`;
+          ? `Uploading ${uploadName}… ${formatBytes(loaded)} / ${formatBytes(total)}`
+          : `Uploading ${uploadName}… ${formatBytes(loaded)}`;
         showProgress(label, f);
       },
     });
     hideProgress();
-    return result;
+    await applySyncPatch(rec.id, {
+      source: targetSource,
+      remoteId: result.remoteId,
+      remoteEtag: result.etag,
+      remoteName: uploadName,
+      name: uploadName,        // if we suffixed, reflect locally too
+      pendingUpload: false,
+      remoteFound: true,
+      lastSyncedAt: Date.now(),
+    });
+    return "ok";
   } catch (err) {
     hideProgress();
-    logError(`upload:${filename}`, `OneDrive upload: ${err.message || err}`);
-    return null;
+    logError(`upload:${rec.name}`, `OneDrive upload: ${err.message || err}`);
+    return "fail";
+  }
+}
+
+// Iterate all pendingUpload records and try to push each. Triggered on:
+//   - app boot (after MSAL init)
+//   - window.online event
+//   - sign-in success
+//   - drag-drop (kicks one off immediately)
+// No polling. No aggressive retry on failure — failed records keep
+// pendingUpload=true; next opportunity tries again.
+let _flushInFlight = false;
+async function flushPendingUploads() {
+  if (_flushInFlight) return;
+  _flushInFlight = true;
+  try {
+    if (!isOneDriveConfigured()) return;
+    const { getAccount } = await import("./onedriveAuth.js");
+    const account = await getAccount();
+    if (!account) return;
+    const all = await listWorlds();
+    const pending = all.filter((w) => w.pendingUpload && !w.uploadDeferred && w.blob);
+    if (pending.length === 0) return;
+    for (const w of pending) {
+      const outcome = await pushRecord(w);
+      if (outcome === "ok") {
+        await renderWorldsList().catch(() => {});
+      }
+      // "fail" / "skip" / "deferred" don't trigger re-render of others;
+      // pendingUpload stays true for failures, will retry next chance.
+      if (outcome === "fail" || outcome === "skip") break;  // stop on first error
+    }
+  } catch (err) {
+    console.warn("flushPendingUploads:", err);
+  } finally {
+    _flushInFlight = false;
   }
 }
 
@@ -682,6 +793,10 @@ async function cacheWorld(source, remoteId, name, opts = {}) {
   const p = providers.find((p) => p.source === source);
   if (!p) throw new Error(`no provider for source=${source}`);
   const existing = await findByRemoteId(source, remoteId);
+  // Manual ↓ supersedes any tombstone for this (source, remoteId).
+  // (Background mergeRemoteList respects tombstones; explicit user action
+  // doesn't.) Idempotent — no-op if no tombstone exists.
+  if (!quiet) await deleteTombstone(source, remoteId).catch(() => {});
   if (!quiet) showProgress(`Downloading ${name}…`, 0);
   let result;
   try {
@@ -747,33 +862,80 @@ async function refreshThumbnailForRec(rec, idOverride = null) {
   }
 }
 
-// Background cache invalidation. For each cached remote-sourced world, ask
-// the provider whether the source has changed (cheap conditional GET). New
-// content lands in IDB; the currently-rendered scene is NOT swapped (user's
-// in it), but next world-switch / reload picks up the update.
+// Background sync: per-provider merge + cached-record content refresh.
+// Per docs/sync-constraints.md:
+//   - List failure → no record mutation at all (U3 — only successful
+//     lists can flip remoteFound)
+//   - Empty-list safety net (#2 detail) — refuse to batch-ghost when 0
+//     items returned but we had N cached for that source
+//   - Per-item: mark remoteFound, clear stale tombstones (etag mismatch),
+//     conditional content refresh, thumbnail refresh
+// Stub creation deferred: v1 doesn't materialize remote-only items into
+// IDB rows; the render layer synthesizes them from provider.list().
 async function checkRemoteUpdates() {
   const cached = await listWorlds();
-  for (const w of cached) {
-    if (!w.remoteId) continue;
-    if (w.source !== "bundled" && w.source !== "onedrive") continue;
-    cacheWorld(w.source, w.remoteId, w.name, { quiet: true })
-      .then((rec) => {
-        if (rec && rec.remoteEtag !== w.remoteEtag) {
-          console.log(`updated ${w.source}:${w.remoteId} (${w.remoteEtag} → ${rec.remoteEtag})`);
-          const isCurrent =
-            (current.id && current.id === rec.id) ||
-            (current.remoteId && current.source === rec.source && current.remoteId === rec.remoteId);
-          showWorldUpdateToast(rec.name, isCurrent);
-          renderWorldsList().catch(() => {});
+  for (const p of providers) {
+    if (typeof p.list !== "function") continue;
+    const cachedForSource = cached.filter((w) => w.source === p.source && w.remoteId);
+
+    let items;
+    try {
+      items = await p.list();
+    } catch (err) {
+      console.warn(`mergeRemoteList ${p.source} failed:`, err.message || err);
+      continue;       // no signal → no mutation
+    }
+    const seen = new Map();
+    for (const it of items) seen.set(it.remoteId, it);
+
+    // Empty-list safety net: if remote returned [] but local has cached
+    // records for this source, assume transient and DO NOT batch-ghost.
+    // Per-item processing still runs for items that ARE in the list.
+    const ghostingAll = items.length === 0 && cachedForSource.length > 0;
+    if (ghostingAll) {
+      console.warn(`mergeRemoteList ${p.source}: empty list but ${cachedForSource.length} cached — safety net engaged, skipping ghost marks`);
+    }
+
+    // Per-cached-record: remoteFound flip + content refresh
+    for (const w of cachedForSource) {
+      const matchingItem = seen.get(w.remoteId);
+      if (matchingItem) {
+        // Found upstream. Un-ghost if it was a ghost; refresh content if etag changed.
+        if (!w.remoteFound) {
+          await applySyncPatch(w.id, { remoteFound: true, lastSyncedAt: Date.now() });
         }
-      })
-      .catch((err) => {
-        console.warn(`background sync ${w.source}:${w.remoteId} failed:`, err);
-      });
-    // Thumbnail refresh runs independently: even if the glb didn't change
-    // (304), the artist might have updated the sidecar PNG.
-    refreshThumbnailForRec(w).catch(() => {});
+        cacheWorld(w.source, w.remoteId, w.name, { quiet: true })
+          .then((rec) => {
+            if (rec && rec.remoteEtag !== w.remoteEtag) {
+              const isCurrent =
+                (current.id && current.id === rec.id) ||
+                (current.remoteId && current.source === rec.source && current.remoteId === rec.remoteId);
+              showWorldUpdateToast(rec.name, isCurrent);
+              renderWorldsList().catch(() => {});
+            }
+          })
+          .catch((err) => console.warn(`refresh ${w.source}:${w.remoteId}:`, err));
+        refreshThumbnailForRec(w).catch(() => {});
+      } else if (!ghostingAll) {
+        // Genuinely missing from a successful list → mark ghost.
+        // Keep blob (constraint P1.8 — ghosts never auto-delete).
+        if (w.remoteFound !== false) {
+          await applySyncPatch(w.id, { remoteFound: false });
+        }
+      }
+    }
+
+    // Stale tombstone GC: for any item currently in the remote list with
+    // an etag different from a stored tombstone, clear the tombstone so
+    // the new version isn't suppressed forever (constraint P1.7).
+    for (const it of items) {
+      const stillMatches = await isTombstoned(p.source, it.remoteId, it.etag);
+      if (!stillMatches) {
+        await deleteTombstone(p.source, it.remoteId).catch(() => {});
+      }
+    }
   }
+  renderWorldsList().catch(() => {});
 }
 
 
@@ -872,9 +1034,16 @@ async function bootstrap() {
   await renderWorldsList();
   checkRemoteUpdates();
 
-  // Kick off MSAL init in the background. When it resolves:
-  //   - refresh the sign-in bar (might find a cached signed-in account)
+  // Kick off MSAL init in the background. When it resolves and we have an
+  // active account:
+  //   - refresh the sign-in bar
   //   - re-render worlds list (OneDrive provider now returns real entries)
+  //   - on FIRST-EVER signin (hasEverSignedIn was false) and there are
+  //     pre-existing local records, set them pendingUpload=true so the
+  //     first-time-signin auto-promote runs. Migration guard: if there's
+  //     already a cached MSAL account but hasEverSignedIn was never set
+  //     (old user, pre-this-code), silently mark and skip auto-promote.
+  //   - flushPendingUploads (handles both fresh pending and just-flagged)
   //
   // Failures here are silent (console only). MSAL flaking — offline, third-
   // party cookies blocked, Microsoft outage — must not surface as a red
@@ -882,16 +1051,47 @@ async function bootstrap() {
   if (isOneDriveConfigured()) {
     (async () => {
       try {
-        const { getPCA } = await import("./onedriveAuth.js");
+        const { getPCA, getAccount } = await import("./onedriveAuth.js");
         await getPCA();
+        const account = await getAccount();
+        if (account) {
+          const wasFirstTime = !(await hasEverSignedIn());
+          await markSignedIn();
+          if (wasFirstTime) {
+            // Auto-promote ONLY when there's no prior tracked sign-in.
+            // For users who had an MSAL cached account from before this
+            // code shipped, wasFirstTime is technically true but we want
+            // to be conservative — only auto-promote if the user has any
+            // source=local records waiting AND hasn't expressed otherwise.
+            const localPending = (await listWorlds()).filter((w) =>
+              w.source === "local" && !w.uploadDeferred && !w.pendingUpload);
+            for (const w of localPending) {
+              await applySyncPatch(w.id, { pendingUpload: true });
+            }
+            if (localPending.length > 0) {
+              setStatus(`Pushing ${localPending.length} local world(s) to OneDrive…`);
+            }
+          }
+        }
         await refreshOneDriveStatus();
         await renderWorldsList();
+        flushPendingUploads().catch(() => {});
       } catch (err) {
         console.warn("OneDrive boot failed (offline?):", err);
       }
     })();
   }
 }
+
+// Retry triggers for pendingUpload — per constraint #4 / P1.4 these are
+// the event-driven opportunities (no polling).
+window.addEventListener("online", () => {
+  flushPendingUploads().catch(() => {});
+  checkRemoteUpdates().catch(() => {});
+});
+// Menu reappear (controls.unlock, xr.sessionend) → also a good moment.
+// The existing handlers in this file already call checkRemoteUpdates;
+// add flushPendingUploads alongside.
 
 // Render token: every renderWorldsList increments this and captures it. Any
 // async append inside the same render checks the token against the current
@@ -933,15 +1133,17 @@ async function renderWorldsList() {
       if (token !== renderToken) return;
       for (const it of items) {
         if (cachedKey.has(`${p.source}:${it.remoteId}`)) continue;
+        // Per constraint #2 + P1.7: hide items the user has tombstoned
+        // (delete-pinned to their etag). A new cloud-side etag will have
+        // invalidated the tombstone in checkRemoteUpdates' GC pass, in
+        // which case this is a no-op.
+        if (await isTombstoned(p.source, it.remoteId, it.etag)) continue;
+        if (token !== renderToken) return;
         appendWorldCard({
           kind: "uncached",
           source: p.source,
           remoteId: it.remoteId,
           name: it.name,
-          // Sidecar metadata from the provider. thumbnailUrl is used as
-          // direct <img src> for bundled (cheap, browser caches). For
-          // OneDrive, thumbnailRemoteId is shipped through to handleCache
-          // so cacheWorld can pull the sidecar bytes into IDB.
           thumbnailUrl: it.thumbnailUrl || null,
           thumbnailRemoteId: it.thumbnailRemoteId || null,
         }, true, token);
@@ -1010,16 +1212,36 @@ function appendWorldCard(w, uncached, token) {
     }
   }
 
-  // Source badges (top-left)
+  // Source + sync-state badges (top-left)
+  const badges = document.createElement("div");
+  badges.className = "world-badges";
   if (w.source === "bundled" || w.source === "onedrive") {
-    const badges = document.createElement("div");
-    badges.className = "world-badges";
     const badge = document.createElement("span");
     badge.className = "world-badge";
     badge.textContent = w.source === "bundled" ? "default" : "onedrive";
     badges.appendChild(badge);
-    li.appendChild(badges);
   }
+  if (w.pendingUpload) {
+    const b = document.createElement("span");
+    b.className = "world-badge world-badge-pending";
+    b.title = "Waiting to upload to OneDrive";
+    b.textContent = "↑ pending";
+    badges.appendChild(b);
+  } else if (w.uploadDeferred) {
+    const b = document.createElement("span");
+    b.className = "world-badge world-badge-deferred";
+    b.title = "Upload skipped — tap card to re-arm";
+    b.textContent = "local only";
+    badges.appendChild(b);
+  }
+  if (w.remoteFound === false && w.source !== "local") {
+    const b = document.createElement("span");
+    b.className = "world-badge world-badge-ghost";
+    b.title = "Removed from cloud — your local copy is preserved";
+    b.textContent = "missing upstream";
+    badges.appendChild(b);
+  }
+  if (badges.children.length > 0) li.appendChild(badges);
 
   // Info overlay (bottom)
   const info = document.createElement("div");

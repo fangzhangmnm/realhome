@@ -151,6 +151,7 @@ function createOneDriveProvider() {
       return items.map((it) => ({
         remoteId: it.remoteId,
         name: it.name,
+        etag: it.etag || "",
         thumbnailRemoteId: it.thumbnailRemoteId || null,
         thumbnailEtag: it.thumbnailEtag || "",
       }));
@@ -210,7 +211,28 @@ function createOneDriveProvider() {
         return null;
       }
     },
+
+    // Write capability — used by app.js's flushPendingUploads. Bundled
+    // doesn't implement these; sync layer skips records on read-only
+    // providers.
+    async getItemByName(filename) {
+      const { graph } = await getMod();
+      return graph.getAppFolderItemByName(filename);
+    },
+    async upload(filename, blob, opts = {}) {
+      const { graph } = await getMod();
+      return graph.uploadItemToAppFolder(filename, blob, opts);
+    },
+    async delete(remoteId) {
+      const { graph } = await getMod();
+      return graph.deleteAppFolderItem(remoteId);
+    },
   };
 }
 
 export const providers = [createBundledProvider(), createOneDriveProvider()];
+
+// Convenience lookup. Caller should null-check.
+export function getProvider(source) {
+  return providers.find((p) => p.source === source) || null;
+}

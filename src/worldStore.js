@@ -1,37 +1,65 @@
 // IndexedDB persistence for user worlds.
 //
-// Schema (v1):
-//   one object store "worlds", keyPath "id" (uuid). Each record:
-//     id              string
-//     name            string   display name (usually the source filename)
-//     blob            Blob     the .glb we render — single source of truth. Starts as the
-//                              raw upload / remote-fetched bytes, gets replaced in-place
-//                              by the optimized output of the gltf-transform pipeline.
-//     byteLength      number   blob.size, for quota readouts
-//     createdAt       number   epoch ms
-//     lastVisitedAt   number   epoch ms — used for sort order in the worlds list
-//     source          "local" | "bundled" | "onedrive"
-//                              "bundled"  = same-origin app-shipped world
-//                              "onedrive" = synced from Microsoft Graph AppFolder
-//     remoteId        string|null  source identifier for change detection / re-fetch:
-//                              bundled  → the same-origin URL  (e.g. "./worlds/X.glb")
-//                              onedrive → the Graph item ID
-//                              local    → null (no remote to sync from)
-//     remoteEtag      string|null  last seen etag / lastModifiedDateTime from source.
-//                              Used for "If-None-Match" conditional GET on bundled,
-//                              and for change detection on OneDrive listings.
-//     optimized       bool     true iff the blob has already been through the
-//                              gltf-transform pipeline. New uploads / fresh sync
-//                              start at false; the optimizer flips it after it
-//                              produces a meaningful size win.
+// Schema (v3):
+//   "worlds" object store, keyPath "id" (uuid). Each record:
+//     id                  string
+//     name                string   display name (usually the source filename)
+//     blob                Blob     the .glb we render — single source of truth.
+//     byteLength          number   blob.size, for quota readouts
+//     createdAt           number   epoch ms
+//     lastVisitedAt       number   epoch ms — sort order in worlds list
+//     source              "local" | "bundled" | "onedrive"
+//                                  "bundled"  = same-origin app-shipped
+//                                  "onedrive" = synced from Microsoft Graph AppFolder
+//     remoteId            string|null  identifier for change detection / re-fetch:
+//                                  bundled  → same-origin URL
+//                                  onedrive → Graph item ID
+//                                  local    → null
+//     remoteEtag          string|null  last seen etag/cTag, for If-None-Match
+//     remoteName          string|null  actual remote filename (may differ from `name`)
+//     thumbnail           Blob|null    cached sidecar PNG bytes (offline preview)
+//     thumbnailRemoteId   string|null  opaque key for sidecar re-fetch
+//
+//   ── v3 additions (see docs/sync-constraints.md) ──
+//     pinned              bool     "Top + High protection level" — never auto-evicted.
+//                                  True for user uploads (source=local) and user-cached
+//                                  cloud items (↓ button). False reserved for future
+//                                  auto-sync caches that LRU could evict.
+//     pendingUpload       bool     "wants to be on cloud, hasn't made it yet"
+//                                  Set at drag time IF signed in; cleared on successful push.
+//                                  Stays true across sessions until success or user
+//                                  explicitly defers via collision prompt.
+//     uploadDeferred      bool     User clicked "keep local, don't upload" on a collision
+//                                  prompt. Skip auto-retry. UI surfaces a per-card ↑ to
+//                                  re-arm pendingUpload manually.
+//     remoteFound         bool     Last successful list saw this remoteId on the cloud.
+//                                  False = "ghost" (cloud item gone / moved / account
+//                                  switch). Per constraint #2, ghosts are NEVER
+//                                  auto-deleted — user must × them.
+//
+//   "settings" object store, keyPath "key". Free-form k/v.
+//
+//   "tombstones" object store (v3), keyPath "id" (uuid). Each record:
+//     id            uuid
+//     sourceId      string   matches Worlds.source for now (single onedrive instance)
+//     remoteId      string   the remote item id user deleted
+//     remoteEtag    string|null  etag at delete time — see constraint #2 etag pinning.
+//                                Null for legacy tombstones (treated as "any etag").
+//     deletedAt     number
+//   Index: by_source_remote → [sourceId, remoteId], unique.
+//
+// Legacy tombstones (v2): a settings-store array of remoteIds without etag.
+// Kept readable by migrateLegacyTombstones for back-compat; new code uses
+// the IDB store API below (insertTombstone / findTombstone / ...).
 //
 // Migration policy: additive only. Bump DB_VERSION + handle in onupgradeneeded.
 // Never drop / rename a store or field destructively.
 
 const DB_NAME = "realhome";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const STORE = "worlds";
 const SETTINGS_STORE = "settings";
+const TOMBSTONES_STORE = "tombstones";
 
 let dbPromise = null;
 
@@ -42,15 +70,43 @@ function openDB() {
     req.onerror = () => reject(req.error);
     req.onupgradeneeded = (e) => {
       const db = req.result;
+      const tx = req.transaction;
       if (e.oldVersion < 1) {
         const store = db.createObjectStore(STORE, { keyPath: "id" });
         store.createIndex("by_lastVisitedAt", "lastVisitedAt", { unique: false });
       }
       if (e.oldVersion < 2) {
-        // Key/value settings (tombstones, future lastWorldId / quota cap / etc.)
-        // Lives in IDB instead of localStorage so a single "clear my data"
-        // (delete the IDB database) wipes everything.
         db.createObjectStore(SETTINGS_STORE, { keyPath: "key" });
+      }
+      if (e.oldVersion < 3) {
+        // New tombstone store. Composite unique index for fast lookup.
+        const t = db.createObjectStore(TOMBSTONES_STORE, { keyPath: "id" });
+        t.createIndex("by_source_remote", ["sourceId", "remoteId"], { unique: true });
+
+        // Backfill new fields on existing worlds.
+        //
+        // Defaults follow constraint #2 (no data loss):
+        //   pinned=true        → all currently-stored worlds count as user-precious
+        //                        ("the only paths that wrote here are user actions:
+        //                        drag-drop / ↓ cache / first-time bundled cache").
+        //                        Future auto-sync caches will write pinned=false.
+        //   pendingUpload=false → nothing is mid-flight at migration time
+        //   uploadDeferred=false → nothing deferred either
+        //   remoteFound=true   → optimistic; the next mergeRemoteList will correct
+        const worldsStore = tx.objectStore(STORE);
+        const cursorReq = worldsStore.openCursor();
+        cursorReq.onsuccess = (ev) => {
+          const cur = ev.target.result;
+          if (!cur) return;
+          const r = cur.value;
+          if (r.pinned === undefined) r.pinned = true;
+          if (r.pendingUpload === undefined) r.pendingUpload = false;
+          if (r.uploadDeferred === undefined) r.uploadDeferred = false;
+          if (r.remoteFound === undefined) r.remoteFound = true;
+          if (r.remoteName === undefined) r.remoteName = null;
+          cur.update(r);
+          cur.continue();
+        };
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -66,6 +122,11 @@ async function tx(mode) {
 async function txSettings(mode) {
   const db = await openDB();
   return db.transaction(SETTINGS_STORE, mode).objectStore(SETTINGS_STORE);
+}
+
+async function txTombstones(mode) {
+  const db = await openDB();
+  return db.transaction(TOMBSTONES_STORE, mode).objectStore(TOMBSTONES_STORE);
 }
 
 function reqP(req) {
@@ -85,15 +146,39 @@ export async function addWorld(blob, name, opts = {}) {
     byteLength: blob.size,
     createdAt: now,
     lastVisitedAt: now,
-    source: opts.source || "local",       // "local" | "bundled" | "onedrive"
-    remoteId: opts.remoteId || null,      // URL for bundled, item-id for onedrive
-    remoteEtag: opts.remoteEtag || null,  // last-seen etag/mtime for change detection
-    optimized: opts.optimized || false,   // true if the blob came out of the optimizer
-    thumbnailRemoteId: opts.thumbnailRemoteId || null,  // opaque key for sidecar re-fetch
+    source: opts.source || "local",
+    remoteId: opts.remoteId || null,
+    remoteEtag: opts.remoteEtag || null,
+    remoteName: opts.remoteName || null,
+    optimized: opts.optimized || false,
+    thumbnailRemoteId: opts.thumbnailRemoteId || null,
+    // v3 sync-state fields. Caller-controlled. Defaults match constraint #2:
+    //   - user uploads / user-cached items default pinned=true (caller can
+    //     override for auto-sync writes that should be LRU-evictable)
+    //   - pendingUpload only when caller explicitly says so (drag-with-account)
+    pinned: opts.pinned !== undefined ? opts.pinned : true,
+    pendingUpload: opts.pendingUpload || false,
+    uploadDeferred: opts.uploadDeferred || false,
+    remoteFound: opts.remoteFound !== undefined ? opts.remoteFound : true,
   };
   const store = await tx("readwrite");
   await reqP(store.add(record));
   return record;
+}
+
+// Sync-layer write: apply arbitrary fields to a record without touching
+// timestamps. Use for "remote says X" updates (etag bumps, remoteFound
+// flips, pendingUpload clearing on push success). The user-initiated
+// touchWorld / replaceBlob / updateRemoteSync helpers still exist for
+// their specific purposes.
+export async function applySyncPatch(id, patch) {
+  if (!id) return null;
+  const store = await tx("readwrite");
+  const r = await reqP(store.get(id));
+  if (!r) return null;
+  Object.assign(r, patch);
+  await reqP(store.put(r));
+  return r;
 }
 
 // Lookup by source + remoteId. Used to find an existing bundled/onedrive record
@@ -221,6 +306,90 @@ export async function setSetting(key, value) {
   const store = await txSettings("readwrite");
   await reqP(store.put({ key, value }));
 }
+
+// ── Tombstones (v3 IDB store) ────────────────────────────────────────────
+//
+// Per docs/sync-constraints.md "Empty-list safety net" + "Tombstone
+// etag-pinning" rules. A tombstone records "user deleted *this etag* of
+// this (source, remoteId)" — a fresh etag on the cloud (artist updated
+// the file) makes the tombstone stale and the world is re-discovered.
+//
+// Per-source-key uniqueness: insertTombstone replaces any existing
+// tombstone for the same (sourceId, remoteId) (a fresh delete supersedes).
+
+// Internal: read tombstone by (sourceId, remoteId) via the composite index.
+async function getTombstoneRaw(sourceId, remoteId) {
+  if (!sourceId || !remoteId) return null;
+  const store = await txTombstones("readonly");
+  const idx = store.index("by_source_remote");
+  return reqP(idx.get([sourceId, remoteId]));
+}
+
+// Returns true if (sourceId, remoteId, currentEtag) is suppressed.
+//   - No tombstone → not suppressed
+//   - Tombstone with etag=null → suppressed (legacy "permanent" tombstone,
+//     matches any current etag)
+//   - Tombstone with etag AND currentEtag missing → suppressed CONSERVATIVELY
+//     (we can't disprove staleness; better to over-suppress than to silently
+//     show something the user thought they deleted)
+//   - Both etags present → string equality
+export async function isTombstoned(sourceId, remoteId, currentEtag) {
+  const t = await getTombstoneRaw(sourceId, remoteId);
+  if (!t) return false;
+  if (t.remoteEtag == null) return true;
+  if (!currentEtag) return true;
+  return t.remoteEtag === currentEtag;
+}
+
+// Write or replace the tombstone for (sourceId, remoteId).
+// remoteEtag is the etag at delete time — see constraint #2 etag-pinning.
+export async function insertTombstone(sourceId, remoteId, remoteEtag) {
+  if (!sourceId || !remoteId) return null;
+  const existing = await getTombstoneRaw(sourceId, remoteId);
+  const id = existing?.id || crypto.randomUUID();
+  const record = {
+    id,
+    sourceId,
+    remoteId,
+    remoteEtag: remoteEtag || null,
+    deletedAt: Date.now(),
+  };
+  const store = await txTombstones("readwrite");
+  await reqP(store.put(record));
+  return record;
+}
+
+// Delete a stale tombstone (its pinned etag no longer matches cloud, OR the
+// remote item is gone entirely — mergeRemoteList calls this in both cases).
+export async function deleteTombstone(sourceId, remoteId) {
+  const t = await getTombstoneRaw(sourceId, remoteId);
+  if (!t) return;
+  const store = await txTombstones("readwrite");
+  await reqP(store.delete(t.id));
+}
+
+export async function listTombstones() {
+  const store = await txTombstones("readonly");
+  return reqP(store.getAll());
+}
+
+// ── Auth-history flag (used by constraint #4 first-time-signin) ──────────
+//
+// Persistent boolean that flips true on the user's first-ever successful
+// sign-in and never resets. Used to distinguish "first time enabling cloud
+// sync" (auto-promote pre-existing local files OK) from "signing back in
+// after a logout" (do NOT auto-promote, user might intentionally keep some
+// files local).
+const HAS_EVER_SIGNED_IN_KEY = "hasEverSignedIn";
+export async function hasEverSignedIn() {
+  return !!(await getSetting(HAS_EVER_SIGNED_IN_KEY, false));
+}
+export async function markSignedIn() {
+  await setSetting(HAS_EVER_SIGNED_IN_KEY, true);
+}
+
+// ── Legacy tombstones (pre-v3, settings-based) ───────────────────────────
+// Kept readable for migrateLegacyTombstones; not used by new code paths.
 
 // Tombstones: remoteIds the user has explicitly deleted. Sync skips these so a
 // deleted bundled / onedrive world doesn't auto-resurrect on next boot.
