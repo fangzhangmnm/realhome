@@ -132,6 +132,48 @@ step 2 jumps the view back to body. This is the standard VR comfort
 trade-off — a small jump during the discrete snap is invisible amid the
 rotation itself.
 
+## System tracking reset (Quest "Reset View")
+
+When the user long-presses Quest's Meta button → "Reset View", WebXR
+fires a `reset` event on the active `XRReferenceSpace`. The reference
+frame's origin is re-anchored to the user's current physical pose
+(XZ + forward yaw); floor Y is left alone.
+
+Without explicit handling, the next animation frame's `camera.position`
+reads in the NEW frame while `tracking_origin` is still anchored to
+the OLD frame. The roomscale path reads `intent_local = hmd_now -
+tracking_origin` as a huge vector and drags `player_pos.xz` to wherever
+the shift was. Common symptom: player falls below the floor (new XZ
+is outside the walkable mesh → groundCheck returns null → gravity).
+Even when the user stands still: the system re-anchors the origin to
+their current pose, the apparent XZ delta is still large.
+
+`event.transform` is an `XRRigidTransform` describing the new origin's
+pose in the OLD frame. The yaw component is how much the reference
+frame rotated; without compensating it, world heading would appear to
+rotate (camera_yaw drops to ~0 in new frame because user's forward IS
+the new forward, so we add that yaw to player_rot to preserve
+world_heading = player_rot + camera_yaw).
+
+`src/app.js` attaches a listener on the first XR frame (and on
+re-entry) which stores the yaw shift in a pending flag.
+`player.handleTrackingReset(yawShift)` runs in the next animation tick
+BEFORE `updateVR` consumes `tracking_origin`:
+
+```python
+def handleTrackingReset(yawShift):
+    player_rot += yawShift                          # world heading stable
+    tracking_origin = camera.position.xz            # roomscale anchor at HMD
+    syncRig()                                       # immediate visual update
+    # body position / velocity / grounded preserved — "Reset View" is
+    # a recalibration, not a respawn.
+```
+
+Two consecutive resets (user resets, doesn't move, resets again): the
+second event still fires; `event.transform.orientation` is identity
+(no yaw delta), `tracking_origin` re-snaps to the still-current HMD
+position (no movement). World heading and position invariant. ✓
+
 ## Reset (world load + first XR frame + fall-too-far respawn)
 
 ```python

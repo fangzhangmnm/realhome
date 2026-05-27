@@ -1409,6 +1409,44 @@ function formatRelativeTime(ts) {
 }
 
 // --- Render loop ---
+// ── System tracking-reset handling ────────────────────────────────────────
+//
+// Quest's "Reset View" (long-press Meta button) fires `reset` on the
+// XRReferenceSpace. We must compensate or roomscale interprets the
+// apparent HMD jump as user-walked → player_pos drags into invalid
+// space → user appears to fall through the floor. See docs/vr-locomotion.md.
+//
+// event.transform: an XRRigidTransform describing the new origin's pose
+// in the OLD frame's coords. The yaw component tells us how much the
+// reference frame rotated; we add that to player_rot so world heading
+// stays stable. tracking_origin is snapped in handleTrackingReset.
+//
+// Capture-and-defer: we set a pending flag in the event handler and
+// apply in the next animation tick, where camera.position is guaranteed
+// to reflect the new reference frame.
+let _pendingTrackingResetYaw = null;
+let _resetListenerAttached = false;
+const _resetQuat = new THREE.Quaternion();
+const _resetEuler = new THREE.Euler(0, 0, 0, "YXZ");
+function ensureResetListenerAttached() {
+  if (_resetListenerAttached) return;
+  if (!renderer.xr.isPresenting) return;
+  const refSpace = renderer.xr.getReferenceSpace?.();
+  if (!refSpace || typeof refSpace.addEventListener !== "function") return;
+  refSpace.addEventListener("reset", (event) => {
+    const t = event?.transform;
+    if (!t) { _pendingTrackingResetYaw = 0; return; }
+    _resetQuat.set(t.orientation.x, t.orientation.y, t.orientation.z, t.orientation.w);
+    _resetEuler.setFromQuaternion(_resetQuat, "YXZ");
+    _pendingTrackingResetYaw = _resetEuler.y;
+  });
+  _resetListenerAttached = true;
+}
+renderer.xr.addEventListener("sessionend", () => {
+  _resetListenerAttached = false;
+  _pendingTrackingResetYaw = null;
+});
+
 // setAnimationLoop drives both the regular RAF and the WebXR frame loop —
 // three.js swaps the source automatically based on session state.
 const clock = new THREE.Clock();
@@ -1418,8 +1456,20 @@ renderer.setAnimationLoop(() => {
   const isXR = renderer.xr.isPresenting;
   // Capture tracking_origin from real HMD pose on the *first* XR frame —
   // sessionstart fires before pose is read, so reset here when transitioning in.
-  if (isXR && !wasPresenting) player.reset();
+  if (isXR && !wasPresenting) {
+    player.reset();
+    ensureResetListenerAttached();
+  }
   wasPresenting = isXR;
+  // System tracking-reset compensation BEFORE updateVR consumes tracking_origin.
+  // Camera.position is in the new reference frame by this point.
+  if (isXR) {
+    ensureResetListenerAttached();   // in case getReferenceSpace was null on first frame
+    if (_pendingTrackingResetYaw !== null) {
+      player.handleTrackingReset(_pendingTrackingResetYaw);
+      _pendingTrackingResetYaw = null;
+    }
+  }
   const out = isXR ? xr.update(dt) : flat.update(dt);
   vignette.update(out?.vignette ?? 0, dt);
   renderer.render(scene, camera);

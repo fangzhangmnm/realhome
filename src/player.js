@@ -231,11 +231,33 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
     onReset();
   }
 
+  // ── System-level tracking reset (Quest "Reset View") ─────────────────
+  //
+  // WebXR fires `reset` on the XRReferenceSpace when the runtime re-anchors
+  // tracking (user long-presses Meta button → "Reset View"). The reference
+  // frame's origin + forward shift to match the user's current physical
+  // pose. Without handling this we'd:
+  //   - interpret the apparent HMD XZ jump as roomscale "user walked" and
+  //     drag player_pos to a possibly-invalid position (→ fall below floor)
+  //   - have the world appear rotated by the yaw component of the shift
+  //
+  // Fix: receive the transform's yaw shift from app.js's reset listener
+  // (XRReferenceSpace.reset event), add it to player_rot to keep world
+  // heading stable, and snap tracking_origin to current HMD pose so the
+  // next roomscale tick reads intent_local = 0. Body position / velocity /
+  // grounded stay intact — the user pressed "Reset View", not "Respawn".
+  function handleTrackingReset(yawShift) {
+    if (Number.isFinite(yawShift)) player_rot += yawShift;
+    tracking_origin.set(camera.position.x, camera.position.z);
+    syncRig();
+  }
+
   return {
     updateFlat,
     updateVR,
     reset,
     setSpawnPoint,
+    handleTrackingReset,
     setSeatedBump: (m) => { seated_bump = m; syncRig(); },
   };
 }
