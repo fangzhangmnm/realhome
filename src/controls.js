@@ -11,7 +11,7 @@ const LOOK_DEADZONE = 0.12;
 const PITCH_LIMIT = Math.PI / 2 - 0.01;
 const _euler = new THREE.Euler(0, 0, 0, "YXZ");
 
-export function createFlatControls(camera, player, domElement) {
+export function createFlatControls(camera, /* unused */_player, domElement) {
   const controls = new PointerLockControls(camera, domElement);
 
   const keys = { w: false, a: false, s: false, d: false, space: false };
@@ -39,8 +39,9 @@ export function createFlatControls(camera, player, domElement) {
     return null;
   }
 
-  function update(dt) {
-    // walkZ > 0 = forward (matches player.js sign convention).
+  // Read gameplay inputs (called once per render frame, then handed to
+  // physics steps). NO writes — just observation.
+  function readInputs() {
     let walkX = 0, walkZ = 0, jumpHeld = false;
     if (keys.w) walkZ += 1;
     if (keys.s) walkZ -= 1;
@@ -54,22 +55,29 @@ export function createFlatControls(camera, player, domElement) {
         walkX += pad.axes[0] || 0;
         walkZ += -(pad.axes[1] || 0);
       }
-      const lx = pad.axes[2] || 0;
-      const ly = pad.axes[3] || 0;
-      if (Math.abs(lx) > LOOK_DEADZONE || Math.abs(ly) > LOOK_DEADZONE) {
-        _euler.setFromQuaternion(camera.quaternion, "YXZ");
-        _euler.y -= lx * LOOK_SPEED * dt;
-        _euler.x -= ly * LOOK_SPEED * dt;
-        if (_euler.x > PITCH_LIMIT) _euler.x = PITCH_LIMIT;
-        else if (_euler.x < -PITCH_LIMIT) _euler.x = -PITCH_LIMIT;
-        _euler.z = 0;
-        camera.quaternion.setFromEuler(_euler);
-      }
       if (pad.buttons[0]?.pressed) jumpHeld = true;
     }
-
-    return player.updateFlat(walkX, walkZ, jumpHeld, dt);
+    return { walkX, walkZ, jumpHeld };
   }
 
-  return { controls, update, isLocked: () => controls.isLocked };
+  // Apply gamepad smooth-look to camera.quaternion. Per-render-frame
+  // (representation, NOT physics) — must match render rate or the look
+  // feels rate-coupled. Mouse-look is handled internally by
+  // PointerLockControls via mousemove events, already per-frame.
+  function applyLook(dt) {
+    const pad = readGamepad();
+    if (!pad) return;
+    const lx = pad.axes[2] || 0;
+    const ly = pad.axes[3] || 0;
+    if (Math.abs(lx) <= LOOK_DEADZONE && Math.abs(ly) <= LOOK_DEADZONE) return;
+    _euler.setFromQuaternion(camera.quaternion, "YXZ");
+    _euler.y -= lx * LOOK_SPEED * dt;
+    _euler.x -= ly * LOOK_SPEED * dt;
+    if (_euler.x > PITCH_LIMIT) _euler.x = PITCH_LIMIT;
+    else if (_euler.x < -PITCH_LIMIT) _euler.x = -PITCH_LIMIT;
+    _euler.z = 0;
+    camera.quaternion.setFromEuler(_euler);
+  }
+
+  return { controls, readInputs, applyLook, isLocked: () => controls.isLocked };
 }

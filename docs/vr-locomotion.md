@@ -132,6 +132,67 @@ step 2 jumps the view back to body. This is the standard VR comfort
 trade-off — a small jump during the discrete snap is invisible amid the
 rotation itself.
 
+## Fixed-dt physics + per-render-frame representation
+
+Two clocks drive the player module:
+
+| Clock | Rate | Who reads / writes |
+|---|---|---|
+| **render dt** (variable) | display refresh (Quest 72/80/90/120, desktop variable) | camera quaternion (mouse-look / gamepad smooth-look / HMD pose), syncRig output, vignette, the render call itself |
+| **physics dt** (fixed = 1/90 = 11.11 ms) | constant regardless of render rate | player_pos / player_rot / tracking_origin / velY / grounded / collision queries / snap-turn / roomscale |
+
+Render loop (in `src/app.js`):
+
+```python
+render_dt = clock.getDelta()  # variable
+
+# Per-render-frame representation:
+#  - camera-look (flat: gamepad applyLook writes camera.quaternion)
+#  - inputs cached once
+if not is_xr: flat.applyLook(render_dt)
+inputs = xr.readInputs() if is_xr else flat.readInputs()
+
+# Accumulator + fixed-dt physics steps:
+phys_accumulator += render_dt
+while phys_accumulator >= PHYS_DT and step_count < MAX_PHYS_STEPS:
+    player.stepVR(inputs, PHYS_DT)  # or stepFlat
+    phys_accumulator -= PHYS_DT
+    step_count += 1
+if step_count == MAX_PHYS_STEPS:
+    phys_accumulator = 0  # tab-throttle spike → drop residue
+
+# Per-render-frame representation:
+player.syncRig()                       # rig follows latest gameplay state
+vignette.update(player.getVignetteAmount(), render_dt)
+renderer.render(scene, camera)
+```
+
+**Why this split:** each physics tick has identical numerical behavior
+(jump apex, walk speed, collision invariants) regardless of render rate.
+A 144 Hz monitor and a 60 Hz tab-throttled background tab give the same
+gameplay trajectory. The variable-dt-with-cap approach (what we had
+before) drifts on dt spikes — semi-implicit Euler's apex error is O(dt),
+so a 50ms cap means a 14cm jump-apex variance under spike conditions.
+
+Per docs/principles.md "academic-rigor robustness" + saved feedback
+memory: each step preserves its invariants, no "cap and hope."
+
+**Translation jitter at mismatched render/physics rates:** when a
+render frame has 0 physics steps (display refresh faster than
+PHYS_DT, e.g. desktop 144Hz vs 90Hz physics), rig.position is unchanged
+from last frame, head_world.xz still moves with camera.position.xz (HMD
+pose). Translation visually "freezes" for that frame in flat mode;
+imperceptible in VR (camera tracking dominates head_world).
+
+**Rotation per render frame:** camera-look (mouse-look, gamepad
+smooth-look in flat; HMD in VR) MUST be tied to render rate, not
+physics. Otherwise rotation feels rate-coupled and induces motion
+sickness in VR. So `flat.applyLook(render_dt)` runs every render frame.
+Snap-turn in VR is gameplay (writes player_rot, ticks at physics rate)
+and visually shows up the moment the next render frame's `syncRig()`
+pulls the new player_rot — at worst one render frame of lag, masked
+by the snap rotation itself.
+
 ## System tracking reset (Quest "Reset View")
 
 When the user long-presses Quest's Meta button → "Reset View", WebXR

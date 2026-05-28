@@ -8,8 +8,12 @@ function readStick(gp) {
   return a ? { x: ax[2] || 0, y: ax[3] || 0 } : { x: ax[0] || 0, y: ax[1] || 0 };
 }
 
-export function createXrControls(renderer, player) {
-  function update(dt) {
+export function createXrControls(renderer, /* unused */_player) {
+  // Read gameplay inputs (called once per render frame, then handed to
+  // physics steps). NO writes — pure observation. HMD pose is read by
+  // player.stepVR directly from camera.position which the XR runtime
+  // writes per render frame.
+  function readInputs() {
     const session = renderer.xr.getSession();
     let walkX = 0, walkZ = 0, snapStickX = 0, jumpHeld = false;
 
@@ -33,9 +37,8 @@ export function createXrControls(renderer, player) {
         }
       }
     }
-
-    return player.updateVR(walkX, walkZ, snapStickX, jumpHeld, dt);
+    return { walkX, walkZ, snapStickX, jumpHeld };
   }
 
-  return { update };
+  return { readInputs };
 }

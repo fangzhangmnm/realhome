@@ -1447,31 +1447,83 @@ renderer.xr.addEventListener("sessionend", () => {
   _pendingTrackingResetYaw = null;
 });
 
-// setAnimationLoop drives both the regular RAF and the WebXR frame loop —
-// three.js swaps the source automatically based on session state.
+// Render loop. Two clocks:
+//   - render dt (variable, tied to display refresh): drives camera-look,
+//     syncRig, vignette, the render call itself. Representation.
+//   - physics dt (fixed): drives player_pos / player_rot / tracking_origin /
+//     velY / grounded / collision. Each physics step has identical
+//     numerical behavior regardless of render rate (the "academic-rigor"
+//     preference — see docs/principles.md). Accumulator pattern: any
+//     residue < PHYS_DT carries to the next render frame; runs of multiple
+//     steps within one render frame (e.g. after a tab-throttle spike) are
+//     capped by MAX_PHYS_STEPS to prevent spiral-of-death.
+//
+// PHYS_DT = 1/90 picked because Quest's most common refresh is 90 Hz —
+// one physics step per render frame, no accumulator residue. Desktop 60
+// Hz gets ~1.5 steps/frame on average (clean alternating 1/2). Higher
+// refresh (Quest 120 / desktop 144) gets ~0.6-0.75 steps/frame and may
+// have sub-frame visual jitter on translation — accepted per discussion
+// (translation jitter is imperceptible in VR; rotation isn't, but rotation
+// is per-render-frame already).
+const PHYS_DT = 1 / 90;
+const MAX_PHYS_STEPS = 5;
+const RENDER_DT_CAP = 0.1;     // last-resort safety cap on getDelta (browser tab spikes)
 const clock = new THREE.Clock();
+let physAccumulator = 0;
 let wasPresenting = false;
 renderer.setAnimationLoop(() => {
-  const dt = Math.min(0.05, clock.getDelta());
+  const renderDt = Math.min(RENDER_DT_CAP, clock.getDelta());
   const isXR = renderer.xr.isPresenting;
-  // Capture tracking_origin from real HMD pose on the *first* XR frame —
-  // sessionstart fires before pose is read, so reset here when transitioning in.
+
+  // First XR frame: capture HMD pose into tracking_origin. Drop physics
+  // accumulator so the new session starts clean.
   if (isXR && !wasPresenting) {
     player.reset();
     ensureResetListenerAttached();
+    physAccumulator = 0;
   }
   wasPresenting = isXR;
-  // System tracking-reset compensation BEFORE updateVR consumes tracking_origin.
-  // Camera.position is in the new reference frame by this point.
+
+  // System tracking-reset compensation (Quest "Reset View"). Must run
+  // BEFORE any physics step consumes tracking_origin.
   if (isXR) {
-    ensureResetListenerAttached();   // in case getReferenceSpace was null on first frame
+    ensureResetListenerAttached();
     if (_pendingTrackingResetYaw !== null) {
       player.handleTrackingReset(_pendingTrackingResetYaw);
       _pendingTrackingResetYaw = null;
     }
   }
-  const out = isXR ? xr.update(dt) : flat.update(dt);
-  vignette.update(out?.vignette ?? 0, dt);
+
+  // Per-render-frame: camera-look representation. In VR, the HMD writes
+  // camera.position + camera.quaternion via WebXR. In flat, gamepad
+  // smooth-look writes camera.quaternion here (PointerLockControls
+  // handles mouse-look via mousemove events). Either way, camera state
+  // is current for the upcoming render.
+  if (!isXR) flat.applyLook(renderDt);
+
+  // Read gameplay inputs once per render frame. Same inputs are used by
+  // all physics steps in this frame — that's correct (inputs don't
+  // change between sub-frame physics ticks).
+  const inputs = isXR ? xr.readInputs() : flat.readInputs();
+
+  // Physics accumulator loop. Fixed-dt steps preserve "each step has
+  // identical behavior" invariant.
+  physAccumulator += renderDt;
+  let stepCount = 0;
+  while (physAccumulator >= PHYS_DT && stepCount < MAX_PHYS_STEPS) {
+    if (isXR) player.stepVR(inputs, PHYS_DT);
+    else      player.stepFlat(inputs, PHYS_DT);
+    physAccumulator -= PHYS_DT;
+    stepCount++;
+  }
+  if (stepCount === MAX_PHYS_STEPS) physAccumulator = 0;   // spike → drop residue
+
+  // Per-render-frame: representation writes. syncRig pulls latest
+  // gameplay state into rig.position / rig.rotation. Vignette reads
+  // current HMD pose vs tracking_origin (HMD pose is live).
+  player.syncRig();
+  vignette.update(isXR ? player.getVignetteAmount() : 0, renderDt);
+
   renderer.render(scene, camera);
 });
 

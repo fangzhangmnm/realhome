@@ -107,61 +107,57 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
   }
 
   // ── Flat (desktop) ───────────────────────────────────────────────────
-  // Mouse-look writes camera.quaternion; we ignore it for direction since
-  // camera.getWorldDirection already accounts for it. tracking_origin stays
-  // at (0,0) in flat (camera.position.xz stays at (0,0)), so the bridge
-  // degenerates to rig.position = player_pos / rig.rotation = player_rot.
-  function updateFlat(walkX, walkZ, jumpHeld, dt) {
-    const v = walkVector(walkX, walkZ, dt);
+  //
+  // Physics step only — does NOT write to the rig. Caller (app.js render
+  // loop) runs syncRig() once per render frame after one-or-more steps.
+  // Splitting state-update from representation-write lets us run physics
+  // at fixed dt while rendering / camera-look stay per-render-frame.
+  // See docs/vr-locomotion.md "Fixed-dt physics" + memory rule
+  // "academic-rigor robustness".
+  function stepFlat(inputs, dt) {
+    const v = walkVector(inputs.walkX, inputs.walkZ, dt);
     if (v) {
       player_pos.x += v.x;
       player_pos.z += v.z;
       const col = getCollision();
       if (col) col.resolveCapsule(player_pos, camera.position.y);
     }
-    applyVertical(jumpHeld, dt);
-    syncRig();
-    return { vignette: 0 };
+    applyVertical(inputs.jumpHeld, dt);
   }
 
   // ── VR ───────────────────────────────────────────────────────────────
-  // Single collide_and_slide per frame: joystick XOR roomscale.
-  //   Joystick > deadzone   → locomotion only; HMD physical drift accumulates
-  //                            as head_offset until vignette kicks in
-  //   Joystick idle         → roomscale: body chases HMD's tracking-space
-  //                            delta; tracking_origin follows body's actual move
+  // Same split: physics state only, no syncRig. Roomscale reads
+  // camera.position.xz which is the live HMD pose (XR runtime writes it
+  // every render frame). When multiple physics steps run in a single
+  // render frame, all steps read the SAME camera.position — that's
+  // correct (the HMD pose doesn't change between physics steps within
+  // one render frame).
   //
-  // Snap-turn fires on the right-stick X axis edge (TURN_THRESHOLD with
-  // hysteresis at TURN_RELEASE). Snap forces roomscale catch-up then clears
-  // tracking_origin so head re-anchors to player_pos — rotation pivots on
-  // player_pos.
-  function updateVR(walkX, walkZ, snapStickX, jumpHeld, dt) {
-    // (1) Snap-turn edge detector
-    const absSnap = Math.abs(snapStickX);
+  // Single collide_and_slide per step: joystick XOR roomscale.
+  function stepVR(inputs, dt) {
+    // (1) Snap-turn edge detector. The lastTurnSign hysteresis means
+    // repeated steps in one render frame with the same stick value
+    // correctly only fire once per crossing.
+    const absSnap = Math.abs(inputs.snapStickX);
     if (absSnap < TURN_RELEASE) lastTurnSign = 0;
-    if (absSnap > TURN_THRESHOLD && Math.sign(snapStickX) !== lastTurnSign) {
-      const sign = Math.sign(snapStickX);
-      // push right (+1) → turn right → -Y rotation
+    if (absSnap > TURN_THRESHOLD && Math.sign(inputs.snapStickX) !== lastTurnSign) {
+      const sign = Math.sign(inputs.snapStickX);
       snap(-sign * SNAP_TURN_DEG * Math.PI / 180);
       lastTurnSign = sign;
     }
 
-    // (2) XZ locomotion: joystick XOR roomscale
-    const v = walkVector(walkX, walkZ, dt);
+    // (2) XZ locomotion: joystick XOR roomscale.
+    const v = walkVector(inputs.walkX, inputs.walkZ, dt);
     if (v) {
-      // Joystick mode — tracking_origin untouched
       player_pos.x += v.x;
       player_pos.z += v.z;
       const col = getCollision();
       if (col) col.resolveCapsule(player_pos, camera.position.y);
     } else {
-      // Roomscale mode — body chases HMD
       const c = Math.cos(player_rot), s = Math.sin(player_rot);
       const hmdX = camera.position.x, hmdZ = camera.position.z;
-      // intent_local = hmd_now − tracking_origin
       const ilx = hmdX - tracking_origin.x;
       const ilz = hmdZ - tracking_origin.y;
-      // intent_world = R · intent_local
       const iwx =  c * ilx + s * ilz;
       const iwz = -s * ilx + c * ilz;
 
@@ -172,20 +168,21 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
       if (col) col.resolveCapsule(player_pos, camera.position.y);
       const awx = player_pos.x - _prev.x;
       const awz = player_pos.z - _prev.z;
-
-      // tracking_origin += R⁻¹ · actual_world  (R⁻¹ for +Y rotation is R(-θ))
       tracking_origin.x +=  c * awx - s * awz;
       tracking_origin.y +=  s * awx + c * awz;
     }
 
-    // (3) Vertical
-    applyVertical(jumpHeld, dt);
+    // (3) Vertical.
+    applyVertical(inputs.jumpHeld, dt);
+  }
 
-    // (4) Bridge + vignette
-    syncRig();
+  // Vignette amount based on current HMD position vs tracking_origin.
+  // Called once per render frame (visual feedback). Returns 0 in flat
+  // mode (camera.position stays put + tracking_origin stays put).
+  function getVignetteAmount() {
     const offX = camera.position.x - tracking_origin.x;
     const offZ = camera.position.z - tracking_origin.y;
-    return { vignette: Math.min(1, Math.hypot(offX, offZ) / VIGNETTE_FULL_LAG) };
+    return Math.min(1, Math.hypot(offX, offZ) / VIGNETTE_FULL_LAG);
   }
 
   // ── Snap-turn (internal; call from updateVR) ─────────────────────────
@@ -253,8 +250,13 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
   }
 
   return {
-    updateFlat,
-    updateVR,
+    // Fixed-dt physics step (caller in render loop with accumulator)
+    stepFlat,
+    stepVR,
+    // Per-render-frame representation write
+    syncRig,
+    getVignetteAmount,
+    // State management
     reset,
     setSpawnPoint,
     handleTrackingReset,
