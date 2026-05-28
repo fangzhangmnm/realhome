@@ -209,6 +209,40 @@ If size becomes a problem later: do it server-side (artist's
 build pipeline, OneDrive ingest hook, whatever). Don't make every
 client redo the same work on every cache.
 
+## 11. Each-step-preserves-invariants over cap-and-hope
+
+When designing numerical / state / physics systems, default to a
+design where **each discrete step preserves the invariants you care
+about**, rather than "use a variable step size and cap edge cases."
+
+Concrete examples in this project:
+- **Fixed-dt physics + accumulator** for the player module (see
+  `docs/vr-locomotion.md` "Fixed-dt physics + per-render-frame
+  representation"). Each physics tick runs at the same dt regardless
+  of render rate; jump apex / walk speed / collision invariants stay
+  identical on Quest 90 Hz, desktop 60 Hz, throttled-tab 5 Hz.
+- **Substepping** for movement intent that exceeds half the collision
+  radius (proposed for later, not yet implemented). Each sub-step
+  preserves "delta < radius" so discrete push-out is provably reliable.
+- **Tombstone etag-pinning** (sync layer). Each tombstone has a
+  precise scope ("the *specific etag* I deleted"); a fresh upstream
+  etag automatically invalidates instead of "tombstone stays forever
+  until manually cleared."
+- **Event-driven re-anchoring** (Quest "Reset View"): listen to the
+  WebXR reset event and re-anchor `tracking_origin` explicitly. The
+  alternative (heuristic: detect a large HMD delta) misses the second
+  consecutive reset because the apparent delta is small.
+
+What's the alternative we avoid? "Code path mostly works; we add a
+`Math.min(0.05, dt)` cap and assume nothing else can go wrong." That
+strategy degrades silently when an actual spike happens — the cap
+just hides the symptom while changing behavior unpredictably.
+
+User has explicitly stated this as an aesthetic preference (saved in
+feedback memory). Negotiable, but the bar to NOT use the rigorous
+pattern is roughly: "the rigorous version is >5x more code AND the
+common case is bounded."
+
 ## Validation note
 
 Each principle above is supported by something we built (or built then
