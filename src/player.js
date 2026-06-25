@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import {
-  WALK_SPEED, DASH_MULTIPLIER, JUMP_VELOCITY, GRAVITY, GRAVITY_HELD, TERMINAL_VELOCITY,
+  WALK_SPEED, DASH_SPEED, JUMP_VELOCITY, GRAVITY, GRAVITY_HELD, TERMINAL_VELOCITY,
   SNAP_TURN_DEG, PLAYER_HEIGHT, STEP_HEIGHT,
 } from "./config.js";
 
@@ -90,7 +90,7 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
 
   // Walk direction in world XZ given local stick X/Z (+right, +forward).
   // Uses camera's world-forward (head's actual look direction). `dash` (held)
-  // multiplies the speed — see config.DASH_MULTIPLIER. Dash only affects
+  // swaps WALK_SPEED for the fixed DASH_SPEED — see config. Dash only affects
   // horizontal locomotion; jump/gravity are untouched.
   function walkVector(walkX, walkZ, dt, dash = false) {
     const mag = Math.hypot(walkX, walkZ);
@@ -99,7 +99,7 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
     _forward.y = 0;
     _forward.normalize();
     _right.copy(_forward).cross(_UP).normalize();
-    const speed = Math.min(mag, 1) * WALK_SPEED * (dash ? DASH_MULTIPLIER : 1) * dt;
+    const speed = Math.min(mag, 1) * (dash ? DASH_SPEED : WALK_SPEED) * dt;
     return {
       x: (_forward.x * walkZ + _right.x * walkX) * (speed / mag),
       z: (_forward.z * walkZ + _right.z * walkX) * (speed / mag),
