@@ -140,7 +140,8 @@ branch, not the roomscale branch.
 | left thumbstick press (`buttons[3]`) | dash (hold) |
 | right stick X | snap-turn |
 | right A / B (`buttons[4]`/`[5]`) | jump |
-| both grips (`buttons[1]`) held ~0.7 s | live-reload current world (see [world-transitions.md](world-transitions.md)) |
+| both thumbsticks pressed L3+R3 (`buttons[3]`) held ~0.7 s | live-reload current world (see [world-transitions.md](world-transitions.md)) |
+| both grips (`buttons[1]`) held ~0.5 s | respawn to spawn marker (`player.reset`) |
 
 ## Snap-turn — pivot always on `player_pos`
 

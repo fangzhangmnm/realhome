@@ -350,6 +350,16 @@ button {
 .world-action.danger:hover { background: rgba(220, 100, 100, 0.28); color: #ff9a9a; }
 .world-action.danger-strong:hover { background: rgba(220, 100, 100, 0.42); color: #fff; }
 
+/* Inline SVG icons (replaced the former emoji/glyph button labels). The
+   dynamically-built icons (app.js makeIcon) carry inline width/height; the
+   static index.html ones (close X, enter play) are sized here. */
+.drawer-x { display: inline-flex; align-items: center; justify-content: center; }
+.drawer-x svg { width: 16px; height: 16px; }
+.enter-prompt-button-glyph { display: inline-flex; }
+.enter-prompt-button-glyph svg { width: 14px; height: 14px; }
+.world-badge { display: inline-flex; align-items: center; gap: 3px; }
+.error-log .error-dismiss { display: inline-flex; align-items: center; }
+
 /* ── Hints (footer of main area) ───────────────────────────────────────── */
 .hints {
   margin: 0;

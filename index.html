@@ -40,11 +40,11 @@
           var loc = e.filename
             ? "  " + (e.filename.split("/").pop()) + ":" + e.lineno
             : "";
-          show("✗ " + (e.message || e.type) + (loc ? "\n" + loc : ""));
+          show("Error: " + (e.message || e.type) + (loc ? "\n" + loc : ""));
         });
         window.addEventListener("unhandledrejection", function (e) {
           var r = e.reason;
-          show("✗ unhandled: " + (r && r.message || r || "unknown"));
+          show("Error: unhandled: " + (r && r.message || r || "unknown"));
         });
       })();
     </script>
@@ -107,7 +107,11 @@
     <aside id="menuDrawer" class="menu-drawer" aria-hidden="true" aria-label="Settings">
       <header class="drawer-head">
         <h2>Settings</h2>
-        <button id="menuClose" type="button" class="drawer-x" aria-label="Close menu">✕</button>
+        <button id="menuClose" type="button" class="drawer-x" aria-label="Close menu">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
       </header>
 
       <section class="drawer-section">
@@ -156,7 +160,9 @@
         <p class="enter-prompt-title">Ready</p>
         <p class="enter-prompt-name" id="enterPromptName">—</p>
         <button id="enterPromptButton" type="button" class="enter-prompt-button">
-          <span class="enter-prompt-button-glyph">▶</span>
+          <span class="enter-prompt-button-glyph">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="6 4 20 12 6 20 6 4"/></svg>
+          </span>
           <span>Tap to enter</span>
         </button>
         <button id="enterPromptCancel" type="button" class="enter-prompt-cancel">Cancel</button>

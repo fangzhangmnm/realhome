@@ -774,7 +774,7 @@ function logError(key, msg) {
     const x = document.createElement("button");
     x.className = "error-dismiss";
     x.type = "button";
-    x.textContent = "×";
+    x.appendChild(makeIcon("x", 12));
     x.addEventListener("click", (ev) => {
       ev.stopPropagation();
       node.remove();
@@ -1276,6 +1276,34 @@ function createSourceLoadingCard(source) {
   return li;
 }
 
+// ── Inline SVG icons (no emoji — family rule: icons are SVG) ──────────────
+// Feather/Lucide-style stroked 24×24 paths, matching the static icons already
+// inline in index.html (refreshButton). Sibling convention is the same; we
+// keep the set local + tiny rather than vendoring an icon library. Setting
+// innerHTML on an SVGElement parses children into the SVG namespace correctly
+// in all evergreen + Quest browsers.
+const ICON_PATHS = {
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+  upload:   '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>',
+  x:        '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+  trash:    '<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>',
+};
+function makeIcon(name, size = 16) {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("width", String(size));
+  svg.setAttribute("height", String(size));
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "2");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  svg.innerHTML = ICON_PATHS[name] || "";
+  return svg;
+}
+
 function appendWorldCard(w, uncached, token) {
   if (token !== renderToken) return;
   const isCurrent =
@@ -1344,7 +1372,8 @@ function appendWorldCard(w, uncached, token) {
     const b = document.createElement("span");
     b.className = "world-badge world-badge-pending";
     b.title = "Waiting to upload to OneDrive";
-    b.textContent = "↑ pending";
+    b.appendChild(makeIcon("upload", 11));
+    b.appendChild(document.createTextNode("pending"));
     badges.appendChild(b);
   } else if (w.uploadDeferred) {
     const b = document.createElement("span");
@@ -1413,7 +1442,7 @@ function appendWorldCard(w, uncached, token) {
       dl.dataset.worldName = w.name;
       if (w.thumbnailRemoteId) dl.dataset.thumbnailRemoteId = w.thumbnailRemoteId;
       dl.title = "Download for offline";
-      dl.textContent = "↓";
+      dl.appendChild(makeIcon("download"));
       actions.appendChild(dl);
     } else {
       const del = document.createElement("button");
@@ -1421,7 +1450,7 @@ function appendWorldCard(w, uncached, token) {
       del.type = "button";
       del.dataset.id = w.id;
       del.title = w.source === "local" ? "Delete world" : "Remove from cache";
-      del.textContent = "×";
+      del.appendChild(makeIcon("x"));
       actions.appendChild(del);
 
       if (w.source === "onedrive") {
@@ -1430,7 +1459,7 @@ function appendWorldCard(w, uncached, token) {
         delRemote.type = "button";
         delRemote.dataset.id = w.id;
         delRemote.title = "Delete from OneDrive";
-        delRemote.textContent = "🗑";
+        delRemote.appendChild(makeIcon("trash"));
         actions.appendChild(delRemote);
       }
     }
@@ -1557,10 +1586,12 @@ renderer.setAnimationLoop(() => {
   // change between sub-frame physics ticks).
   const inputs = isXR ? xr.readInputs() : flat.readInputs();
 
-  // In-VR live-reload shortcut (both grips held). Fire-and-forget; the
-  // `loading` guard inside liveReloadCurrentWorld serializes overlapping
-  // presses. Edge-latched in xrControls so this triggers once per squeeze.
+  // In-VR two-hand shortcuts (edge-latched in xrControls, fire once per press):
+  //   L3+R3 held → live-reload current world (re-fetch + reparse).
+  //   both grips → respawn to the world's spawn marker (player.reset).
+  // Fire-and-forget; liveReloadCurrentWorld's `loading` guard serializes.
   if (isXR && inputs.reload) liveReloadCurrentWorld().catch(() => {});
+  if (isXR && inputs.respawn) player.reset();
 
   // Physics accumulator loop. Fixed-dt steps preserve "each step has
   // identical behavior" invariant.

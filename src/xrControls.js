@@ -5,10 +5,14 @@
 //   buttons[0] trigger   buttons[1] grip/squeeze   buttons[3] thumbstick press
 //   buttons[4] A / X     buttons[5] B / Y
 // Bindings here:
-//   left stick           → walk            right stick X     → snap-turn
-//   right A / B          → jump            left thumbstick    → dash (hold)
-//   BOTH grips held ≥ RELOAD_HOLD_MS → live-reload the current world
-//     (edge-fired once per squeeze; see docs/world-transitions.md).
+//   left stick           → walk            right stick X      → snap-turn
+//   right A / B          → jump            left thumbstick     → dash (hold)
+//   BOTH thumbsticks pressed (L3+R3) held ≥ RELOAD_HOLD_MS → live-reload world
+//   BOTH grips held ≥ RESPAWN_HOLD_MS                      → respawn to spawn
+//     (each edge-fired once per press; see docs/world-transitions.md.)
+//   Note: L3 alone = dash, so during the L3+R3 reload combo dash is also
+//   active — harmless, since the user is standing still to invoke it and dash
+//   only scales joystick glide.
 
 function readStick(gp) {
   if (!gp || !gp.axes) return null;
@@ -17,16 +21,29 @@ function readStick(gp) {
   return a ? { x: ax[2] || 0, y: ax[3] || 0 } : { x: ax[0] || 0, y: ax[1] || 0 };
 }
 
-// Both grips must be squeezed together this long before live-reload fires.
-// A deliberate two-hand hold so it can't be tripped while walking/jumping
-// (grips are otherwise unused in this app). Edge-latched: fires once, re-arms
-// only after both grips release.
+// Two-hand combos must be held this long before firing — a deliberate hold so
+// they can't be tripped mid-locomotion. Reload (network + reparse) gets the
+// longer hold; respawn (local, cheap) a shorter one.
 const RELOAD_HOLD_MS = 700;
+const RESPAWN_HOLD_MS = 500;
+
+// Edge-latched timed hold. Returns true on the single frame the hold completes;
+// re-arms only after `active` goes false. State lives in the passed object.
+function pollHold(latch, active, now) {
+  if (active && !latch.latched) {
+    if (latch.start === 0) latch.start = now;
+    else if (now - latch.start >= latch.holdMs) { latch.latched = true; return true; }
+  } else if (!active) {
+    latch.start = 0;
+    latch.latched = false;
+  }
+  return false;
+}
 
 export function createXrControls(renderer, /* unused */_player) {
-  // Live-reload combo state (closure-private; lives across frames).
-  let gripHoldStart = 0;     // perf-now when both grips first went down (0 = not held)
-  let reloadLatched = false; // true after a fire, until both grips release
+  // Two-hand combo latches (closure-private; persist across frames).
+  const reloadLatch = { start: 0, latched: false, holdMs: RELOAD_HOLD_MS };
+  const respawnLatch = { start: 0, latched: false, holdMs: RESPAWN_HOLD_MS };
 
   // Buzz both controllers so the artist gets a tactile "got it" even though
   // the DOM HUD is invisible in immersive VR. Best-effort — not all runtimes
@@ -46,7 +63,8 @@ export function createXrControls(renderer, /* unused */_player) {
   function readInputs() {
     const session = renderer.xr.getSession();
     let walkX = 0, walkZ = 0, snapStickX = 0, jumpHeld = false, dash = false;
-    let leftGrip = false, rightGrip = false;
+    let leftStick = false, rightStick = false;   // thumbstick PRESS (buttons[3])
+    let leftGrip = false, rightGrip = false;      // squeeze (buttons[1])
 
     if (session) {
       for (const src of session.inputSources) {
@@ -67,31 +85,24 @@ export function createXrControls(renderer, /* unused */_player) {
           if (stick && snapStickX === 0) snapStickX = stick.x;
           if (gp.buttons[4]?.pressed || gp.buttons[5]?.pressed) jumpHeld = true;
         }
-        if (gp.buttons[1]?.pressed) {
-          if (isLeft) leftGrip = true;
-          else if (isRight) rightGrip = true;
-          else { leftGrip = true; rightGrip = true; }   // single unknown source: treat as both
+        const stickBtn = gp.buttons[3]?.pressed;
+        const grip = gp.buttons[1]?.pressed;
+        if (isLeft) { leftStick = leftStick || stickBtn; leftGrip = leftGrip || grip; }
+        else if (isRight) { rightStick = rightStick || stickBtn; rightGrip = rightGrip || grip; }
+        else { // single unknown source: treat its press as "both" so the combo is reachable
+          if (stickBtn) { leftStick = true; rightStick = true; }
+          if (grip) { leftGrip = true; rightGrip = true; }
         }
       }
     }
 
-    // Both-grips-held live-reload, edge-latched on a timed hold.
-    let reload = false;
-    const bothGrips = leftGrip && rightGrip;
-    if (bothGrips && !reloadLatched) {
-      const now = performance.now();
-      if (gripHoldStart === 0) gripHoldStart = now;
-      else if (now - gripHoldStart >= RELOAD_HOLD_MS) {
-        reload = true;
-        reloadLatched = true;
-        pulseHaptics(session);
-      }
-    } else if (!bothGrips) {
-      gripHoldStart = 0;
-      reloadLatched = false;
-    }
+    // Two-hand combos, edge-latched on a timed hold. One perf-now per frame.
+    const now = performance.now();
+    const reload = pollHold(reloadLatch, leftStick && rightStick, now);
+    const respawn = pollHold(respawnLatch, leftGrip && rightGrip, now);
+    if (reload || respawn) pulseHaptics(session);
 
-    return { walkX, walkZ, snapStickX, jumpHeld, dash, reload };
+    return { walkX, walkZ, snapStickX, jumpHeld, dash, reload, respawn };
   }
 
   return { readInputs };

@@ -207,17 +207,25 @@ from the gallery panel always check etag to see if things obsolete."
 
 Inside an immersive Quest session the DOM gallery is invisible — the artist
 can't tap a card to pick up a new export without leaving VR. Shortcut:
-**hold BOTH grip buttons together for ~0.7 s** → `liveReloadCurrentWorld()`,
+**press BOTH thumbsticks (L3+R3) together for ~0.7 s** → `liveReloadCurrentWorld()`,
 which runs the same conditional-fetch + force-reparse path as `handleEnter`
-on the world you're standing in. Loop: Blender export → OneDrive sync → squeeze
-both grips → the room updates in place (player respawns at the spawn marker).
+on the world you're standing in. Loop: Blender export → OneDrive sync → click
+both sticks → the room updates in place (player respawns at the spawn marker).
 
-Binding rationale (see [xrControls.js](../src/xrControls.js)): grips are
-otherwise unused, and a deliberate two-hand timed hold can't be tripped during
-stick locomotion / jumping. Edge-latched (fires once per squeeze, re-arms on
-release). A haptic pulse on both controllers confirms the trigger since no DOM
-HUD is visible in VR. Alternatives if this feels wrong on real hardware: both
-thumbstick-press (L3+R3), or a single dedicated face button.
+A companion shortcut covers the "I wandered off / fell somewhere weird" case
+without a full reload: **hold BOTH grips for ~0.5 s → respawn** to the world's
+spawn marker (`player.reset()`). Industry note: VR's actual convention is
+*recenter* = long-press the Quest Meta button, which only re-anchors the
+tracking origin and is OS-reserved (RealHome already handles its `reset`
+event). There's no universal in-app "respawn to start" button, so this is a
+deliberate custom binding.
+
+Binding rationale (see [xrControls.js](../src/xrControls.js)): both are
+deliberate two-hand timed holds, so they can't be tripped during stick
+locomotion / jumping. Edge-latched (fire once per press, re-arm on release). A
+haptic pulse on both controllers confirms each trigger since no DOM HUD is
+visible in VR. (L3 alone is dash, so the reload combo also activates dash —
+harmless: the user is standing still and dash only scales joystick glide.)
 
 ## Files
 
