@@ -85,6 +85,7 @@ if |snapStickX| > TURN_THRESHOLD and sign(snapStickX) flipped:
 if |joystick| > deadzone:
     # Locomotion: walk in look-direction. tracking_origin untouched —
     # HMD physical drift will accumulate as head_offset until vignette.
+    # speed = WALK_SPEED · (DASH_MULTIPLIER if dash held else 1)
     player_pos.xz += collide_and_slide(joystick_world)
 else:
     # Roomscale: body chases HMD's tracking-space delta.
@@ -105,6 +106,41 @@ syncRig()
 # 5. Vignette amount (UI feedback).
 vignette = clamp(|hmd_now − tracking_origin| / VIGNETTE_FULL_LAG, 0, 1)
 ```
+
+## Dash (hold-to-go-faster)
+
+> as-of 2026-06-25
+
+A pure speed multiplier on joystick locomotion while a dash input is held —
+no acceleration ramp, no stamina, matching `WALK_SPEED`'s hard-clip feel.
+`config.DASH_MULTIPLIER = 2.25` (~9 m/s). Threaded through `walkVector(...,
+dash)` and read from `inputs.dash`.
+
+Bindings:
+
+| Mode | Dash input |
+|------|-----------|
+| Flat (keyboard) | `Shift` |
+| Flat (gamepad)  | left stick press (L3, `buttons[10]`) |
+| VR              | left thumbstick press (`buttons[3]`) |
+
+Dash scales **joystick glide only**. Physical roomscale walking is 1:1 with
+the body and is never multiplied — scaling it would mean "you walked 1 m
+physically, the body moved 2.25 m," which breaks the head↔body invariant and
+induces sim-sickness. See `player.stepVR` — the multiplier rides the joystick
+branch, not the roomscale branch.
+
+## Controller binding map (VR)
+
+> as-of 2026-06-25
+
+| xr-standard input | Action |
+|---|---|
+| left stick | walk |
+| left thumbstick press (`buttons[3]`) | dash (hold) |
+| right stick X | snap-turn |
+| right A / B (`buttons[4]`/`[5]`) | jump |
+| both grips (`buttons[1]`) held ~0.7 s | live-reload current world (see [world-transitions.md](world-transitions.md)) |
 
 ## Snap-turn — pivot always on `player_pos`
 

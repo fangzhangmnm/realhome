@@ -1,6 +1,13 @@
 // Player physics (matches the VR-mode spec — kept here so flat & VR share)
 export const WALK_SPEED = 4;             // m/s, hard clip, no acceleration
 
+// Dash / sprint — hold-to-go-faster. Pure speed multiplier on WALK_SPEED while
+// the dash input is held (flat: Shift / gamepad L3; VR: left thumbstick press).
+// No acceleration ramp, no stamina — it's a "cross the big empty room quickly"
+// convenience, matching WALK_SPEED's hard-clip feel. 2.25× → ~9 m/s, a brisk
+// jog without launching the user past collision-resolution comfort.
+export const DASH_MULTIPLIER = 2.25;
+
 // Jump physics — Minecraft-calibrated, variable-jump-height ("Better Jump" pattern):
 //
 //   rising + held     → GRAVITY_HELD (Minecraft baseline)

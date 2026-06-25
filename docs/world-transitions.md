@@ -166,10 +166,64 @@ const SPAWN_RE = /(^|[_\-\s.])spawn($|[_\-\s.\d])/i;
 Player.setSpawnPoint(spawnInfo) is called before reset() in installWorld.
 HUD status appends "spawn" badge so artist can confirm pickup.
 
+## Freshness-on-enter + live reload
+
+> as-of v(post-eb79fc9) / 2026-06-25
+
+**The bug it fixes.** The artist updates `house.glb` on OneDrive. Background
+`checkRemoteUpdates()` (menu reappear / boot / online) refreshes the IDB blob
+and bumps `remoteEtag`, then toasts "re-enter to see the new version." But
+`handleEnter`'s old `isCurrent` fast path (`if (isCurrent) enterImmersive()`)
+re-entered VR **without re-parsing** — the in-memory `current.root` was still
+the old export. The only way to force a re-parse was to switch to another
+world (which moves `current.id`) and switch back. Confusing.
+
+**The fix.** Two pieces:
+
+1. **Track what's actually rendered.** `current.loadedEtag` = the `remoteEtag`
+   of the bytes *parsed into the scene*, set in every load path
+   (`switchToWorld` / `streamOpenWorld` / `loadFile`). This is distinct from
+   the IDB record's etag, which a background refresh can move ahead of the
+   scene.
+
+2. **Check on every enter.** `handleEnter` for a cached world now ALWAYS does
+   a conditional `cacheWorld()` (etag-only round-trip when unchanged; full
+   download only when the artist changed the file) before deciding. It
+   re-parses (`switchToWorld(id, {force:true})`) when `!isCurrent` OR
+   `rec.remoteEtag !== current.loadedEtag`. Offline / 304 / `source==="local"`
+   all resolve to the existing record, so we still enter with cached bytes.
+
+`switchToWorld` grew a `{force}` option because its `id === current.id` guard
+would otherwise refuse to re-parse the world you're already in.
+
+**Cost.** One Graph `getItemMeta` per enter (the etag check). Unchanged →
+fast, enters within `GESTURE_WINDOW_MS`. Changed → full download, falls to
+the existing enter-prompt fallback. This is the explicit user ask: "enters
+from the gallery panel always check etag to see if things obsolete."
+
+## In-VR live reload (artist iteration loop)
+
+> as-of v(post-eb79fc9) / 2026-06-25
+
+Inside an immersive Quest session the DOM gallery is invisible — the artist
+can't tap a card to pick up a new export without leaving VR. Shortcut:
+**hold BOTH grip buttons together for ~0.7 s** → `liveReloadCurrentWorld()`,
+which runs the same conditional-fetch + force-reparse path as `handleEnter`
+on the world you're standing in. Loop: Blender export → OneDrive sync → squeeze
+both grips → the room updates in place (player respawns at the spawn marker).
+
+Binding rationale (see [xrControls.js](../src/xrControls.js)): grips are
+otherwise unused, and a deliberate two-hand timed hold can't be tripped during
+stick locomotion / jumping. Edge-latched (fires once per squeeze, re-arms on
+release). A haptic pulse on both controllers confirms the trigger since no DOM
+HUD is visible in VR. Alternatives if this feels wrong on real hardware: both
+thumbstick-press (L3+R3), or a single dedicated face button.
+
 ## Files
 
 - [src/app.js](../src/app.js) — `handleEnter`, `switchToWorld`,
-  `streamOpenWorld`, enter-prompt wiring
+  `streamOpenWorld`, `liveReloadCurrentWorld`, `current.loadedEtag`,
+  enter-prompt wiring
 - [src/scene.js](../src/scene.js) — `setWorld`
 - [src/player.js](../src/player.js) — `setSpawnPoint`, `reset`
 - [src/worldLoader.js](../src/worldLoader.js) — `extractSpawn`

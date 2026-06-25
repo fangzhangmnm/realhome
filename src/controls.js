@@ -14,7 +14,7 @@ const _euler = new THREE.Euler(0, 0, 0, "YXZ");
 export function createFlatControls(camera, /* unused */_player, domElement) {
   const controls = new PointerLockControls(camera, domElement);
 
-  const keys = { w: false, a: false, s: false, d: false, space: false };
+  const keys = { w: false, a: false, s: false, d: false, space: false, shift: false };
   const onKey = (down) => (e) => {
     const k = e.code;
     if (k === "KeyW") keys.w = down;
@@ -22,6 +22,7 @@ export function createFlatControls(camera, /* unused */_player, domElement) {
     else if (k === "KeyS") keys.s = down;
     else if (k === "KeyD") keys.d = down;
     else if (k === "Space") { keys.space = down; if (down) e.preventDefault(); }
+    else if (k === "ShiftLeft" || k === "ShiftRight") keys.shift = down;  // dash
     else return;
   };
   document.addEventListener("keydown", onKey(true));
@@ -31,6 +32,7 @@ export function createFlatControls(camera, /* unused */_player, domElement) {
   //   axes[0,1] = left stick (X right+, Y down+)   → walk
   //   axes[2,3] = right stick (X right+, Y down+)  → smooth yaw + pitch (look)
   //   buttons[0] = bottom face button (A / Cross)   → jump
+  //   buttons[10] = left stick press (L3)           → dash
   function readGamepad() {
     const pads = navigator.getGamepads?.() || [];
     for (const p of pads) {
@@ -42,7 +44,7 @@ export function createFlatControls(camera, /* unused */_player, domElement) {
   // Read gameplay inputs (called once per render frame, then handed to
   // physics steps). NO writes — just observation.
   function readInputs() {
-    let walkX = 0, walkZ = 0, jumpHeld = false;
+    let walkX = 0, walkZ = 0, jumpHeld = false, dash = keys.shift;
     if (keys.w) walkZ += 1;
     if (keys.s) walkZ -= 1;
     if (keys.a) walkX -= 1;
@@ -56,8 +58,9 @@ export function createFlatControls(camera, /* unused */_player, domElement) {
         walkZ += -(pad.axes[1] || 0);
       }
       if (pad.buttons[0]?.pressed) jumpHeld = true;
+      if (pad.buttons[10]?.pressed) dash = true;   // L3 = dash
     }
-    return { walkX, walkZ, jumpHeld };
+    return { walkX, walkZ, jumpHeld, dash };
   }
 
   // Apply gamepad smooth-look to camera.quaternion. Per-render-frame

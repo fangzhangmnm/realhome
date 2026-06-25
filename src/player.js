@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import {
-  WALK_SPEED, JUMP_VELOCITY, GRAVITY, GRAVITY_HELD, TERMINAL_VELOCITY,
+  WALK_SPEED, DASH_MULTIPLIER, JUMP_VELOCITY, GRAVITY, GRAVITY_HELD, TERMINAL_VELOCITY,
   SNAP_TURN_DEG, PLAYER_HEIGHT, STEP_HEIGHT,
 } from "./config.js";
 
@@ -89,15 +89,17 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
   }
 
   // Walk direction in world XZ given local stick X/Z (+right, +forward).
-  // Uses camera's world-forward (head's actual look direction).
-  function walkVector(walkX, walkZ, dt) {
+  // Uses camera's world-forward (head's actual look direction). `dash` (held)
+  // multiplies the speed — see config.DASH_MULTIPLIER. Dash only affects
+  // horizontal locomotion; jump/gravity are untouched.
+  function walkVector(walkX, walkZ, dt, dash = false) {
     const mag = Math.hypot(walkX, walkZ);
     if (mag < STICK_DEADZONE) return null;
     camera.getWorldDirection(_forward);
     _forward.y = 0;
     _forward.normalize();
     _right.copy(_forward).cross(_UP).normalize();
-    const speed = Math.min(mag, 1) * WALK_SPEED * dt;
+    const speed = Math.min(mag, 1) * WALK_SPEED * (dash ? DASH_MULTIPLIER : 1) * dt;
     return {
       x: (_forward.x * walkZ + _right.x * walkX) * (speed / mag),
       z: (_forward.z * walkZ + _right.z * walkX) * (speed / mag),
@@ -115,7 +117,7 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
   // See docs/vr-locomotion.md "Fixed-dt physics" + memory rule
   // "academic-rigor robustness".
   function stepFlat(inputs, dt) {
-    const v = walkVector(inputs.walkX, inputs.walkZ, dt);
+    const v = walkVector(inputs.walkX, inputs.walkZ, dt, inputs.dash);
     if (v) {
       player_pos.x += v.x;
       player_pos.z += v.z;
@@ -146,8 +148,9 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
       lastTurnSign = sign;
     }
 
-    // (2) XZ locomotion: joystick XOR roomscale.
-    const v = walkVector(inputs.walkX, inputs.walkZ, dt);
+    // (2) XZ locomotion: joystick XOR roomscale. Dash boosts joystick glide
+    // only — physical roomscale walking is 1:1 with the body, never scaled.
+    const v = walkVector(inputs.walkX, inputs.walkZ, dt, inputs.dash);
     if (v) {
       player_pos.x += v.x;
       player_pos.z += v.z;

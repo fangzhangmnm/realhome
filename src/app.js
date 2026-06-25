@@ -70,6 +70,11 @@ bindWorldLoaderRenderer(renderer);   // KTX2Loader needs renderer to pick ASTC/B
 const current = {
   id: null, source: null, remoteId: null,
   root: null, skyboxes: [], colliders: [], collision: null,
+  // The remoteEtag of the bytes currently PARSED INTO THE SCENE. Distinct
+  // from the IDB record's etag, which a background refresh can bump ahead of
+  // what's rendered. handleEnter / liveReloadCurrentWorld compare the two to
+  // decide whether a re-parse is needed (see docs/world-transitions.md).
+  loadedEtag: null,
 };
 let loading = false;
 
@@ -275,14 +280,30 @@ async function handleEnter(item) {
     (id && id === current.id) ||
     (remoteId && source === current.source && remoteId === current.remoteId);
 
-  // Same world already loaded — just enter on this click's activation.
-  if (isCurrent) { enterImmersive(); return; }
-
   const gestureTime = performance.now();
-  if (id) await switchToWorld(id);
-  else await streamOpenWorld(source, remoteId, name);
 
-  // Bail if the load failed (current state didn't move).
+  if (id) {
+    // Cached world. ALWAYS check the cloud etag before entering — this is the
+    // fix for "artist updated the glb but I have to switch away and back to
+    // see it". cacheWorld does a conditional fetch: an etag-only round-trip
+    // when unchanged, a full download only when the artist actually changed
+    // the file, updating the IDB blob + remoteEtag in place. Offline / 304 /
+    // local-source all resolve to the existing record, so we still enter with
+    // whatever bytes we have.
+    let rec = await getWorld(id);
+    if (rec?.remoteId && rec.source !== "local") {
+      rec = (await cacheWorld(rec.source, rec.remoteId, rec.name, { quietErrors: true })) || rec;
+    }
+    // Re-parse when this isn't the live world, OR when the scene in memory was
+    // built from an older etag than what's now in IDB.
+    const stale = !isCurrent || rec?.remoteEtag !== current.loadedEtag;
+    if (stale) await switchToWorld(id, { force: true });
+  } else {
+    // Uncached / streamed — always fetches fresh bytes anyway.
+    if (!isCurrent) await streamOpenWorld(source, remoteId, name);
+  }
+
+  // Bail if the load failed (current state didn't move to the target).
   const loaded =
     (id && current.id === id) ||
     (remoteId && current.source === source && current.remoteId === remoteId);
@@ -292,6 +313,27 @@ async function handleEnter(item) {
     enterImmersive();
   } else {
     showEnterPrompt(name);
+  }
+}
+
+// Re-fetch + re-parse the world the user is currently standing in. Invoked by
+// the in-VR live-reload shortcut (both grips held — see xrControls.js) so an
+// artist iterating in Blender → OneDrive can see the new export WITHOUT
+// leaving immersive VR (the DOM gallery is invisible inside a Quest session).
+// Reuses the exact same conditional-fetch + force-reparse path as handleEnter.
+async function liveReloadCurrentWorld() {
+  if (loading) return;
+  if (current.id) {
+    const rec = await getWorld(current.id);
+    if (rec?.remoteId && rec.source !== "local") {
+      // quiet: the DOM progress bar isn't visible in immersive VR anyway.
+      await cacheWorld(rec.source, rec.remoteId, rec.name, { quiet: true }).catch(() => {});
+    }
+    await switchToWorld(current.id, { force: true });
+  } else if (current.source && current.remoteId) {
+    // Streamed (uncached) world — re-stream fresh bytes in place.
+    const { source, remoteId } = current;
+    await streamOpenWorld(source, remoteId, hudName.textContent || "world");
   }
 }
 
@@ -418,6 +460,7 @@ async function loadFile(file) {
     current.id = record.id;
     current.source = record.source;
     current.remoteId = record.remoteId;
+    current.loadedEtag = record.remoteEtag || null;
     installWorld(result, file.name);
     setStatus(signedIn ? "saved, uploading…" : "saved locally");
     await renderWorldsList();
@@ -571,8 +614,10 @@ async function flushPendingUploads() {
   }
 }
 
-async function switchToWorld(id) {
-  if (loading || id === current.id) return;
+// `force` re-parses even when id === current.id — used to swap in freshly-
+// synced bytes for the world the user is already standing in (live reload).
+async function switchToWorld(id, { force = false } = {}) {
+  if (loading || (id === current.id && !force)) return;
   loading = true;
   setStatus("loading…");
   showLoading("Loading", "", -1);
@@ -585,6 +630,7 @@ async function switchToWorld(id) {
     current.id = id;
     current.source = record.source;
     current.remoteId = record.remoteId;
+    current.loadedEtag = record.remoteEtag;     // scene now reflects this etag
     installWorld(result, record.name);
     setStatus("");
     await renderWorldsList();
@@ -623,6 +669,7 @@ async function streamOpenWorld(source, remoteId, name) {
     current.id = null;
     current.source = source;
     current.remoteId = remoteId;
+    current.loadedEtag = result.etag || null;
     installWorld(parsed, name);
     setStatus("");
     await renderWorldsList();
@@ -789,8 +836,12 @@ function showWorldUpdateToast(name, isCurrent) {
 //                      a sidecar PNG is pulled into IDB after the world is
 //                      saved. Sidecar fetch failures are silent — the
 //                      gradient placeholder shows through.
+// `quietErrors`: keep the download progress bar, but don't write a persistent
+// error-log entry / "fetch failed" status when the fetch dies. Used by the
+// enter-time freshness check (handleEnter) so a re-enter while offline doesn't
+// spam the menu's error log — the cached bytes are served regardless.
 async function cacheWorld(source, remoteId, name, opts = {}) {
-  const { quiet = false, thumbnailRemoteId = null } = opts;
+  const { quiet = false, quietErrors = false, thumbnailRemoteId = null } = opts;
   const p = providers.find((p) => p.source === source);
   if (!p) throw new Error(`no provider for source=${source}`);
   const existing = await findByRemoteId(source, remoteId);
@@ -810,8 +861,8 @@ async function cacheWorld(source, remoteId, name, opts = {}) {
       showProgress(label, f);
     });
   } catch (err) {
-    if (!quiet) {
-      hideProgress();
+    if (!quiet) hideProgress();
+    if (!quiet && !quietErrors) {
       setStatus("fetch failed");
       logError(`cache:${source}:${remoteId}`, `fetch ${name}: ${err.message || err}`);
     }
@@ -1505,6 +1556,11 @@ renderer.setAnimationLoop(() => {
   // all physics steps in this frame — that's correct (inputs don't
   // change between sub-frame physics ticks).
   const inputs = isXR ? xr.readInputs() : flat.readInputs();
+
+  // In-VR live-reload shortcut (both grips held). Fire-and-forget; the
+  // `loading` guard inside liveReloadCurrentWorld serializes overlapping
+  // presses. Edge-latched in xrControls so this triggers once per squeeze.
+  if (isXR && inputs.reload) liveReloadCurrentWorld().catch(() => {});
 
   // Physics accumulator loop. Fixed-dt steps preserve "each step has
   // identical behavior" invariant.
