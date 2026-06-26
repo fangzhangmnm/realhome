@@ -124,16 +124,17 @@ function readSpawn(marker) {
   return { position, rotation: euler.y };
 }
 
-// Far layer: moved to FAR_LAYER so the render loop can draw it in a separate pass
-// with a large frustum (flat mode: NEAR 1m / FAR 100km), then clear depth and draw
-// the main scene on top. Depth is kept ON (no depthTest hack) so multiple far
-// parallax meshes sort against each other correctly. World transforms are
-// preserved — distance from the camera still varies as the player walks, so
-// parallax is intact (never camera-locked). frustumCulled off so the dome isn't
-// culled when the camera sits inside it; fog off so the backdrop isn't tinted.
-// See docs/world-naming-convention.md § Far layer for the two-pass + clip planes.
+// Far layer: ENABLE FAR_LAYER on top of layer 0 (not .set, which would drop
+// layer 0). Layer 0 keeps it visible to both XR eye cameras (which only ever see
+// layers {0,1}/{0,2}); FAR_LAYER lets flat mode isolate it into its own large-
+// frustum pass. See app.js renderLayered + config.FAR_LAYER for the WebXR
+// eye-layer trap. Depth is kept ON (no depthTest hack) so multiple far parallax
+// meshes sort against each other. World transforms are preserved — distance from
+// the camera still varies as the player walks, so parallax is intact (never
+// camera-locked). frustumCulled off so the dome isn't culled when the camera sits
+// inside it; fog off so the backdrop isn't tinted.
 function applySkyboxTweaks(mesh, mats) {
-  mesh.layers.set(FAR_LAYER);
+  mesh.layers.enable(FAR_LAYER);
   mesh.frustumCulled = false;
   for (const m of mats) {
     if (!m) continue;

@@ -67,13 +67,19 @@ export const FOV_DEG = 75;
 export const NEAR = 0.05;
 export const FAR = 1000;
 
-// Far layer (skybox + distant parallax scenery) renders in a SEPARATE pass with
-// a much larger frustum, so big parallax backdrops aren't clipped by the main
-// FAR. Meshes tagged `skybox` (see worldConvention.js) are moved to FAR_LAYER and
-// drawn first; the main scene then draws over a cleared depth buffer. The wide
-// clip planes apply in flat mode only — in XR the runtime owns the projection,
-// so XR far geometry is still bounded by FAR. See docs/world-naming-convention.md.
-export const FAR_LAYER = 1;              // three.js layer index for far-pass meshes
+// Far layer (skybox + distant parallax scenery). In FLAT mode it renders in a
+// SEPARATE pass with a much larger frustum so big parallax backdrops aren't
+// clipped by the main FAR; the main scene then draws over a cleared depth buffer.
+// In XR the runtime owns the projection, so it's a single normal pass (far
+// geometry bounded by the session FAR). See docs/world-naming-convention.md and
+// app.js renderLayered.
+//
+// FAR_LAYER MUST be ≥ 3: in WebXR three.js reserves layer 1 = left eye, layer 2 =
+// right eye (WebXRManager splits the eye masks &0b011 / &0b101), so a far mesh on
+// layer 1/2 would render in ONE eye only, and any layer ≥ 3 is stripped from both
+// eyes. So far meshes ALSO stay on layer 0 (the only both-eyes layer) and add
+// FAR_LAYER on top — see worldConvention.applySkyboxTweaks.
+export const FAR_LAYER = 3;
 export const SKY_NEAR = 1;               // m
 export const SKY_FAR = 100000;           // m (100 km)
 

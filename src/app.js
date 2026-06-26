@@ -1632,41 +1632,51 @@ renderer.setAnimationLoop(() => {
   renderLayered(isXR);
 });
 
-// Two-pass render. Pass 1: the far layer (skybox + distant parallax scenery,
-// tagged `skybox` → FAR_LAYER in worldConvention) in a large frustum. Then clear
-// the depth buffer and draw the main scene over it, so the far layer is always
-// behind regardless of its true distance (it keeps its world transform, so
-// parallax survives — it is NOT camera-locked). See
-// docs/world-naming-convention.md § Far layer.
+// Render the far layer (skybox + distant parallax) so big parallax backdrops
+// aren't clipped by the main FAR. Far meshes live on BOTH layer 0 and FAR_LAYER
+// (worldConvention) — layer 0 so XR's per-eye cameras (which only ever see
+// layers {0,1}/{0,2}) can render them in both eyes, FAR_LAYER so flat mode can
+// isolate them into their own pass. See docs/world-naming-convention.md.
 //
-// Pass 1 uses autoClear (clears color+depth on whichever framebuffer is bound —
-// works for both the default and the XR framebuffer); pass 2 only clears depth.
+// XR: ONE pass. The runtime owns the projection (its FAR is fixed), so a wider
+// far frustum is impossible — the two-pass would buy nothing. Depth is ON, so
+// the far layer just sorts behind naturally. (Far geometry is bounded by the
+// session FAR; keep XR skyboxes within it.) Critically, this avoids the WebXR
+// layer trap: layers 1/2 are three.js's left/right-eye markers, so a custom
+// layer would render in one eye only.
 //
-// Flat mode swaps the camera clip planes per pass. In XR the runtime owns the
-// projection (depthNear/Far come from the session), so the swap is skipped —
-// the far layer is still isolated by the layer split + depth clear, but its
-// geometry is bounded by the session FAR. (XR multipass needs on-device verify.)
+// Flat: TWO passes with different clip planes. Pass 1 draws ONLY the far layer
+// (camera on FAR_LAYER) in a large frustum; pass 2 clears depth and draws the
+// main scene over it in the normal frustum, with the far meshes hidden so they
+// don't re-render (clipped) in the small frustum. Far meshes keep their world
+// transform, so parallax survives (never camera-locked).
 function renderLayered(isXR) {
-  // Pass 1 — far layer.
+  if (isXR) {
+    renderer.autoClear = true;
+    camera.layers.set(0);                 // both eyes; far meshes are on layer 0
+    renderer.render(scene, camera);
+    return;
+  }
+
+  // Pass 1 — far layer only, large frustum.
   renderer.autoClear = true;
   camera.layers.set(FAR_LAYER);
-  if (!isXR) {
-    camera.near = SKY_NEAR;
-    camera.far = SKY_FAR;
-    camera.updateProjectionMatrix();
-  }
+  camera.near = SKY_NEAR;
+  camera.far = SKY_FAR;
+  camera.updateProjectionMatrix();
   renderer.render(scene, camera);
 
-  // Pass 2 — main scene over a fresh depth buffer, keeping the far-layer color.
+  // Pass 2 — main scene over a fresh depth buffer, far meshes hidden so they
+  // aren't redrawn (and clipped) in the small frustum.
   renderer.autoClear = false;
   renderer.clearDepth();
   camera.layers.set(0);
-  if (!isXR) {
-    camera.near = NEAR;
-    camera.far = FAR;
-    camera.updateProjectionMatrix();
-  }
+  camera.near = NEAR;
+  camera.far = FAR;
+  camera.updateProjectionMatrix();
+  for (const m of current.skyboxes) m.visible = false;
   renderer.render(scene, camera);
+  for (const m of current.skyboxes) m.visible = true;
 }
 
 // --- Service worker + PWA update detection (canonical 4-path pattern) ---
