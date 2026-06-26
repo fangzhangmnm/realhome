@@ -145,6 +145,19 @@ branch, not the roomscale branch.
 | right A / B (`buttons[4]`/`[5]`) | jump |
 | both thumbsticks pressed L3+R3 (`buttons[3]`) held ~0.7 s | live-reload current world (see [world-transitions.md](world-transitions.md)) |
 | both grips (`buttons[1]`) held ~0.5 s | respawn to spawn marker (`player.reset`) |
+| left Y (`buttons[5]`) tap | **DEBUG** cycle physics step-rate (= keyboard `B`) |
+
+### DEBUG: physics step-rate toggle
+
+`B` (keyboard) / left-Y (VR) cycles `PHYS_MODES` in app.js:
+`fixed 90Hz → fixed 60Hz → fixed 30Hz → update (per-frame) →` (wrap). Default
+is fixed 90 (the shipping path). "update" runs ONE `stepVR/stepFlat` per render
+frame at the raw render dt — no accumulator, so position advances every frame
+(no fixed-step temporal aliasing) but jump apex drifts with FPS. Harness for
+diagnosing the high-speed dash judder: if "update" is smooth while "fixed 90"
+judders at `DASH_SPEED`, the cause is fixed-dt without render interpolation.
+Mode shows in the HUD status line (desktop) + a haptic blip (VR). Remove this
+toggle once the judder question is settled.
 
 ## Snap-turn — pivot always on `player_pos`
 

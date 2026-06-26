@@ -1545,12 +1545,34 @@ renderer.xr.addEventListener("sessionend", () => {
 // have sub-frame visual jitter on translation — accepted per discussion
 // (translation jitter is imperceptible in VR; rotation isn't, but rotation
 // is per-render-frame already).
-const PHYS_DT = 1 / 90;
+// ── Physics step-rate (DEBUG TOGGLE) ─────────────────────────────────────
+// Cycle with B (keyboard) or left Y (VR). A/B harness for the high-speed
+// translation judder: "update" integrates ONCE per RENDER frame (variable dt
+// — no fixed-step aliasing, but jump apex drifts with FPS); the fixed modes
+// run the accumulator at a fixed Hz. If "update" is smooth while "fixed 90"
+// judders, the culprit is fixed-dt-without-render-interpolation. Default =
+// fixed 90 (the shipping behaviour). See docs/vr-locomotion.md.
+const PHYS_MODES = [
+  { label: "fixed 90Hz", dt: 1 / 90 },
+  { label: "fixed 60Hz", dt: 1 / 60 },
+  { label: "fixed 30Hz", dt: 1 / 30 },
+  { label: "update (per-frame)", dt: null },
+];
+let physModeIdx = 0;
 const MAX_PHYS_STEPS = 5;
 const RENDER_DT_CAP = 0.1;     // last-resort safety cap on getDelta (browser tab spikes)
 const clock = new THREE.Clock();
 let physAccumulator = 0;
 let wasPresenting = false;
+
+function cyclePhysMode() {
+  physModeIdx = (physModeIdx + 1) % PHYS_MODES.length;
+  physAccumulator = 0;
+  setStatus(`physics: ${PHYS_MODES[physModeIdx].label}`);
+  console.log(`[phys] ${PHYS_MODES[physModeIdx].label}`);
+}
+// Keyboard B → cycle (desktop testing; fires whether or not pointer is locked).
+document.addEventListener("keydown", (e) => { if (e.code === "KeyB") cyclePhysMode(); });
 renderer.setAnimationLoop(() => {
   const renderDt = Math.min(RENDER_DT_CAP, clock.getDelta());
   const isXR = renderer.xr.isPresenting;
@@ -1592,18 +1614,27 @@ renderer.setAnimationLoop(() => {
   // Fire-and-forget; liveReloadCurrentWorld's `loading` guard serializes.
   if (isXR && inputs.reload) liveReloadCurrentWorld().catch(() => {});
   if (isXR && inputs.respawn) player.reset();
+  if (isXR && inputs.cyclePhys) cyclePhysMode();           // left Y → cycle step-rate
 
-  // Physics accumulator loop. Fixed-dt steps preserve "each step has
-  // identical behavior" invariant.
-  physAccumulator += renderDt;
-  let stepCount = 0;
-  while (physAccumulator >= PHYS_DT && stepCount < MAX_PHYS_STEPS) {
-    if (isXR) player.stepVR(inputs, PHYS_DT);
-    else      player.stepFlat(inputs, PHYS_DT);
-    physAccumulator -= PHYS_DT;
-    stepCount++;
+  // Physics step, mode-driven (B / left-Y). "update" = one variable-dt step
+  // per render frame; fixed modes = accumulator at the mode's Hz (the shipping
+  // "each step has identical behaviour" invariant holds within a fixed mode).
+  const physDt = PHYS_MODES[physModeIdx].dt;
+  if (physDt === null) {
+    if (isXR) player.stepVR(inputs, renderDt);
+    else      player.stepFlat(inputs, renderDt);
+    physAccumulator = 0;
+  } else {
+    physAccumulator += renderDt;
+    let stepCount = 0;
+    while (physAccumulator >= physDt && stepCount < MAX_PHYS_STEPS) {
+      if (isXR) player.stepVR(inputs, physDt);
+      else      player.stepFlat(inputs, physDt);
+      physAccumulator -= physDt;
+      stepCount++;
+    }
+    if (stepCount === MAX_PHYS_STEPS) physAccumulator = 0;   // spike → drop residue
   }
-  if (stepCount === MAX_PHYS_STEPS) physAccumulator = 0;   // spike → drop residue
 
   // Per-render-frame: representation writes. syncRig pulls latest
   // gameplay state into rig.position / rig.rotation. Vignette reads
