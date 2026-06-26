@@ -145,19 +145,55 @@ branch, not the roomscale branch.
 | right A / B (`buttons[4]`/`[5]`) | jump |
 | both thumbsticks pressed L3+R3 (`buttons[3]`) held ~0.7 s | live-reload current world (see [world-transitions.md](world-transitions.md)) |
 | both grips (`buttons[1]`) held ~0.5 s | respawn to spawn marker (`player.reset`) |
-| left Y (`buttons[5]`) tap | **DEBUG** cycle physics step-rate (= keyboard `B`) |
+## Render interpolation (smooth motion on fixed-dt physics)
 
-### DEBUG: physics step-rate toggle
+> as-of 2026-06-25 — the shipping locomotion path.
 
-`B` (keyboard) / left-Y (VR) cycles `PHYS_MODES` in app.js:
-`fixed 90Hz → fixed 60Hz → fixed 30Hz → update (per-frame) →` (wrap). Default
-is fixed 90 (the shipping path). "update" runs ONE `stepVR/stepFlat` per render
-frame at the raw render dt — no accumulator, so position advances every frame
-(no fixed-step temporal aliasing) but jump apex drifts with FPS. Harness for
-diagnosing the high-speed dash judder: if "update" is smooth while "fixed 90"
-judders at `DASH_SPEED`, the cause is fixed-dt without render interpolation.
-Mode shows in the HUD status line (desktop) + a haptic blip (VR). Remove this
-toggle once the judder question is settled.
+Confirmed empirically: per-render-frame motion is what reads as smooth; raw
+fixed-dt (no interpolation) judders at speed because the rendered rig quantizes
+to physics steps. The fix keeps deterministic fixed-step physics AND renders
+smoothly — the standard "Fix Your Timestep" (Gaffer) render interpolation.
+
+**Physics = fixed 60 Hz ground truth** (`PHYS_DT = 1/60`, engine-integration
+ready). **Render interpolates the RIG** (the locomotion offset) between the two
+most recent physics states by `alpha = physAccumulator / dt`:
+
+```
+while (accumulator >= dt) {
+  captureRigState(prevRig)   // snapshot BEFORE each step → prev = state before last step
+  step(dt)
+  accumulator -= dt
+}
+captureRigState(curRig)      // cur = current state
+if (discontinuity) prev = cur // teleport/snap this frame → render destination, no smear
+writeRigLerp(prev, cur, accumulator / dt)
+```
+
+**The HMD/camera is NEVER interpolated** — the XR runtime owns `camera.position`
+live (motion-to-photon); interpolating head tracking = latency = sickness. Only
+the locomotion offset (`rig.position`) is interpolated, and that's vection-based,
+so a ≤1-step (~16 ms) lag is imperceptible. Rotation isn't interpolated either:
+snap-turn must stay instant, and flat-mode turn is on the camera. So only
+`rig.position` is lerped; `rig.rotation.y` takes the latest.
+
+**Discontinuity guard** (`player.consumeDiscontinuity()`): `snap()`, `reset()`
+(world load / respawn / first XR frame) and `handleTrackingReset()` set a flag;
+the render loop renders the destination for that frame instead of smearing the
+jump. Consumed both before the step loop (pre-step resets) and inside it (snaps).
+
+**Why 60 not 30**: at `DASH_SPEED` 30 Hz = 33 cm/step (collision can tunnel thin
+walls — resolveCapsule runs per step) + 33 ms interp lag; 60 Hz = 16 cm/step +
+16 ms lag, robust, deterministic, decoupled from 72/90/120 display. Industry-
+normal (Unity FixedUpdate 50, Source 66).
+
+### DEBUG: locomotion-smoothing A/B toggle
+
+`B` (keyboard) / settings-menu "物理步率" button cycles `PHYS_MODES`:
+`fixed 60 + interp (shipping) → update (per-frame) → fixed 60 (raw) → fixed 90
+(raw) →` (wrap). "update" = one variable-dt step per frame (smooth but non-
+deterministic). "raw" = no interpolation (the judder reference). Lets you confirm
+fixed-60-interp feels identical to update on real hardware. Mode shows in the HUD
+(desktop) + the menu button label. Remove this toggle once locked in.
 
 ## Snap-turn — pivot always on `player_pos`
 
@@ -187,12 +223,17 @@ rotation itself.
 
 ## Fixed-dt physics + per-render-frame representation
 
+> Updated 2026-06-25: physics dt is now **1/60** and the rig is **render-
+> interpolated** (see "Render interpolation" above). The "sub-frame jitter is
+> imperceptible, accepted" call below was WRONG at speed (dash judder) — interp
+> superseded it. Clocks model unchanged; only the rate + the interp step differ.
+
 Two clocks drive the player module:
 
 | Clock | Rate | Who reads / writes |
 |---|---|---|
-| **render dt** (variable) | display refresh (Quest 72/80/90/120, desktop variable) | camera quaternion (mouse-look / gamepad smooth-look / HMD pose), syncRig output, vignette, the render call itself |
-| **physics dt** (fixed = 1/90 = 11.11 ms) | constant regardless of render rate | player_pos / player_rot / tracking_origin / velY / grounded / collision queries / snap-turn / roomscale |
+| **render dt** (variable) | display refresh (Quest 72/80/90/120, desktop variable) | camera quaternion (mouse-look / gamepad smooth-look / HMD pose), interpolated rig output, vignette, the render call itself |
+| **physics dt** (fixed = 1/60 = 16.67 ms) | constant regardless of render rate | player_pos / player_rot / tracking_origin / velY / grounded / collision queries / snap-turn / roomscale |
 
 Render loop (in `src/app.js`):
 

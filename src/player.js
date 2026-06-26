@@ -42,17 +42,49 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
   let grounded = true;
   let lastTurnSign = 0;
 
-  // Bridge: gameplay state → three.js rig node.
-  function syncRig() {
+  // ── Bridge: gameplay state → three.js rig node ────────────────────────
+  // captureRigState computes the rig values from current gameplay state into
+  // `out` {x,y,z,rotY} WITHOUT writing — single source of the rig formula,
+  // used by syncRig (write latest) and the render-interpolation path.
+  function captureRigState(out) {
     const c = Math.cos(player_rot), s = Math.sin(player_rot);
     // R · tracking_origin   (rotation around +Y by player_rot)
     const rox = c * tracking_origin.x + s * tracking_origin.y;
     const roz = -s * tracking_origin.x + c * tracking_origin.y;
-    rig.position.x = player_pos.x - rox;
-    rig.position.z = player_pos.z - roz;
-    rig.position.y = player_pos.y + seated_bump;
-    rig.rotation.y = player_rot;
+    out.x = player_pos.x - rox;
+    out.z = player_pos.z - roz;
+    out.y = player_pos.y + seated_bump;
+    out.rotY = player_rot;
+    return out;
   }
+  const _rigTmp = { x: 0, y: 0, z: 0, rotY: 0 };
+  function syncRig() {
+    captureRigState(_rigTmp);
+    rig.position.set(_rigTmp.x, _rigTmp.y, _rigTmp.z);
+    rig.rotation.y = _rigTmp.rotY;
+  }
+
+  // ── Render interpolation ──────────────────────────────────────────────
+  // Physics (player_pos/rot/tracking_origin) is fixed-dt ground truth; the
+  // render frame interpolates the RIG (= locomotion offset, "where the virtual
+  // body stands in the world") between the two most recent physics states so
+  // motion is smooth at any display rate. The HMD/camera pose is NEVER
+  // interpolated — the XR runtime owns it live; interpolating head tracking
+  // would add latency = sickness. See docs/vr-locomotion.md.
+  //
+  // Position is lerped; rotation is NOT (snap-turn must stay instant, and
+  // flat-mode turn lives on the camera, not the rig) → take the latest rotY.
+  function writeRigLerp(prev, cur, alpha) {
+    rig.position.x = prev.x + (cur.x - prev.x) * alpha;
+    rig.position.y = prev.y + (cur.y - prev.y) * alpha;
+    rig.position.z = prev.z + (cur.z - prev.z) * alpha;
+    rig.rotation.y = cur.rotY;
+  }
+  // Set on any teleport / discrete jump (snap-turn, reset, tracking-reset) so
+  // the render loop skips interpolation that frame (prev=cur) — never smear a
+  // designed-in jump across frames.
+  let _discontinuity = false;
+  function consumeDiscontinuity() { const d = _discontinuity; _discontinuity = false; return d; }
 
   // ── Shared vertical physics: gravity + jump + ground/step + respawn ──
   function applyVertical(jumpHeld, dt) {
@@ -207,6 +239,7 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
 
     // 3. Rotate. syncRig() at end of updateVR will pick up new R.
     player_rot += deltaAngle;
+    _discontinuity = true;   // discrete jump — don't interpolate across it
   }
 
   // ── Spawn point (read from glb on installWorld, see worldLoader.js) ──
@@ -227,6 +260,7 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
     velY = 0;
     grounded = true;
     lastTurnSign = 0;
+    _discontinuity = true;   // teleport (world load / respawn) — no interp smear
     syncRig();
     onReset();
   }
@@ -249,6 +283,7 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
   function handleTrackingReset(yawShift) {
     if (Number.isFinite(yawShift)) player_rot += yawShift;
     tracking_origin.set(camera.position.x, camera.position.z);
+    _discontinuity = true;   // reference-frame re-anchor — no interp smear
     syncRig();
   }
 
@@ -256,8 +291,12 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
     // Fixed-dt physics step (caller in render loop with accumulator)
     stepFlat,
     stepVR,
-    // Per-render-frame representation write
+    // Per-render-frame representation write (raw = latest; or interpolate via
+    // captureRigState + writeRigLerp with consumeDiscontinuity to guard jumps)
     syncRig,
+    captureRigState,
+    writeRigLerp,
+    consumeDiscontinuity,
     getVignetteAmount,
     // State management
     reset,
