@@ -6,6 +6,14 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Build tooling — esbuild binary is 10MB + per-OS, build.sh auto-curls it.
+# tools/ = build tools (gitignored); src/vendor/ = runtime libs (committed).
+tools/esbuild/
+dist/realhome-tmp.mjs
+dist/realhome-tmp.mjs.map
+# Note: dist/realhome-<hash>.mjs (the built bundle) IS committed — the deploy
+# workflow composes prebuilt branches, it does not build in CI.
+
 # Worlds: ship only the bundled default. Anything else in worlds/ stays local-only.
 worlds/*.glb
 !worlds/RealHomeDefaultWorld.glb

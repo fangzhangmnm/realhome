@@ -192,6 +192,9 @@
       <span id="worldUpdateText"></span>
     </div>
 
-    <script type="module" src="./src/app.js"></script>
+    <!-- Built by scripts/build.sh → ./dist/realhome-<hash>.mjs (content-hashed).
+         three / msal stay external via the importmap above (vendor not bundled).
+         build.sh seds this hash; don't hand-edit the filename. -->
+    <script type="module" src="./dist/realhome-5954fbeda788.mjs"></script>
   </body>
 </html>

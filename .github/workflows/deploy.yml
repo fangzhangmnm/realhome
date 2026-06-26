@@ -1,0 +1,78 @@
+# 部署 GitHub Pages：prod 分支 → /(线上真用户)，main 分支 → /dev/(日常工作)。
+# 抄 JRP/WebPaint .github/workflows/deploy.yml（家族 mature paradigm）。各分支自己已 commit
+# 好 dist/realhome-<hash>.mjs（人手跑 scripts/build.sh 后 commit）。本 workflow 只「组合两分支
+# → upload」，**不在 CI 里 build**，快且确定。
+#
+# 第一次 setup（见 docs/dev-prod-split.md，顺序要紧——origin/main 现在还是 prod）：
+#   ① 建 prod 分支 = 当前线上：git branch prod <当前线上 sha> && git push origin prod
+#   ② GitHub Settings → Pages → Source 改 "GitHub Actions"（不是 deploy-from-branch）
+#   ③ 之后 push main 才安全（此前 push main 会直接上 prod）
+#   ④ Azure：给 OneDrive 加 …/realhome/dev/ 重定向 URI
+#
+# 注：prod 分支首次 = 旧 raw-module app（index.html 直 load ./src/app.js，无 dist/）；main =
+# 新 bundled（load ./dist/realhome-<hash>.mjs）。compose 整个 src/ + dist/ 都拷，两种形态都成立。
+# promote（ff-merge main→prod）后 prod 也变 bundled，自然对称。
+name: Deploy Pages
+
+on:
+  push:
+    branches: [main, prod]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true   # 新 push 取消在跑的旧 workflow,最后一次必赢(prod race 防踩)
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout prod branch
+        uses: actions/checkout@v4
+        with:
+          ref: prod
+          path: prod-tree
+
+      - name: Checkout main branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: main-tree
+
+      - name: Compose site (prod=/, main=/dev/)
+        run: |
+          mkdir -p site/dev
+          for f in index.html manifest.webmanifest service-worker.js \
+                   icon.svg icon-180.png icon-192.png icon-512.png apple-touch-icon.png; do
+            cp -p prod-tree/$f site/     2>/dev/null || true
+            cp -p main-tree/$f site/dev/ 2>/dev/null || true
+          done
+          # 整个 src/(含 vendor + styles + raw 模块) + dist/(bundle) + worlds/(默认世界)
+          cp -r prod-tree/src    site/src     2>/dev/null || true
+          cp -r main-tree/src    site/dev/src 2>/dev/null || true
+          cp -r prod-tree/dist   site/dist     2>/dev/null || true
+          cp -r main-tree/dist   site/dev/dist 2>/dev/null || true
+          cp -r prod-tree/worlds site/worlds     2>/dev/null || true
+          cp -r main-tree/worlds site/dev/worlds 2>/dev/null || true
+          # /dev/ 不要 SW(改完即见,不走缓存层)；prod SW 的 scope 覆盖 /dev/ 但 fetch 里已 passthrough
+          rm -f site/dev/service-worker.js
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Deploy to Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
