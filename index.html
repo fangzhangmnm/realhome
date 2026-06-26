@@ -97,7 +97,7 @@
         <ul id="worldsList" class="worlds-grid" role="list"></ul>
 
         <p class="hints">
-          <kbd>WASD</kbd> move &nbsp;·&nbsp; <kbd>Shift</kbd> dash &nbsp;·&nbsp; <kbd>Mouse</kbd> look &nbsp;·&nbsp; <kbd>Space</kbd> jump &nbsp;·&nbsp; <kbd>B</kbd> physics mode &nbsp;·&nbsp; <kbd>Esc</kbd> menu
+          <kbd>WASD</kbd> move &nbsp;·&nbsp; <kbd>Shift</kbd> dash &nbsp;·&nbsp; <kbd>Mouse</kbd> look &nbsp;·&nbsp; <kbd>Space</kbd> jump &nbsp;·&nbsp; <kbd>Esc</kbd> menu
         </p>
       </main>
     </div>
@@ -141,8 +141,22 @@
         </button>
       </section>
 
+      <section class="drawer-section">
+        <h3>App</h3>
+        <button id="forceUpdateButton" type="button" class="drawer-link" title="清掉 SW + 缓存，强制拉最新代码。世界数据（IndexedDB）不动。卡在老版本时用。">
+          强制更新（清缓存重启）
+        </button>
+      </section>
+
+      <section class="drawer-section">
+        <h3>Debug</h3>
+        <button id="physModeButton" type="button" class="drawer-link" title="物理步进：fixed 90/60/30Hz 或 update（每渲染帧）。测高速移动卡顿用。点击循环。（快捷键 B）">
+          物理步率：fixed 90Hz
+        </button>
+      </section>
+
       <section class="drawer-section drawer-foot">
-        <p class="drawer-version">RealHome &middot; PWA</p>
+        <p id="drawerVersion" class="drawer-version">RealHome &middot; PWA</p>
       </section>
     </aside>
 
@@ -195,6 +209,6 @@
     <!-- Built by scripts/build.sh → ./dist/realhome-<hash>.mjs (content-hashed).
          three / msal stay external via the importmap above (vendor not bundled).
          build.sh seds this hash; don't hand-edit the filename. -->
-    <script type="module" src="./dist/realhome-5954fbeda788.mjs"></script>
+    <script type="module" src="./dist/realhome-e4efe63092d9.mjs"></script>
   </body>
 </html>

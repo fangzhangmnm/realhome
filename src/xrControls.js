@@ -44,7 +44,6 @@ export function createXrControls(renderer, /* unused */_player) {
   // Two-hand combo latches (closure-private; persist across frames).
   const reloadLatch = { start: 0, latched: false, holdMs: RELOAD_HOLD_MS };
   const respawnLatch = { start: 0, latched: false, holdMs: RESPAWN_HOLD_MS };
-  let prevLeftY = false;   // edge-detect for the left-Y physics-mode cycle (DEBUG)
 
   // Buzz both controllers so the artist gets a tactile "got it" even though
   // the DOM HUD is invisible in immersive VR. Best-effort — not all runtimes
@@ -66,7 +65,6 @@ export function createXrControls(renderer, /* unused */_player) {
     let walkX = 0, walkZ = 0, snapStickX = 0, jumpHeld = false, dash = false;
     let leftStick = false, rightStick = false;   // thumbstick PRESS (buttons[3])
     let leftGrip = false, rightGrip = false;      // squeeze (buttons[1])
-    let leftY = false;                            // left Y (buttons[5]) — DEBUG phys cycle
 
     if (session) {
       for (const src of session.inputSources) {
@@ -89,13 +87,11 @@ export function createXrControls(renderer, /* unused */_player) {
         }
         const stickBtn = gp.buttons[3]?.pressed;
         const grip = gp.buttons[1]?.pressed;
-        const yBtn = gp.buttons[5]?.pressed;   // LEFT only — on the right hand [5] is B=jump
-        if (isLeft) { leftStick = leftStick || stickBtn; leftGrip = leftGrip || grip; leftY = leftY || yBtn; }
+        if (isLeft) { leftStick = leftStick || stickBtn; leftGrip = leftGrip || grip; }
         else if (isRight) { rightStick = rightStick || stickBtn; rightGrip = rightGrip || grip; }
         else { // single unknown source: treat its press as "both" so the combos stay reachable
           if (stickBtn) { leftStick = true; rightStick = true; }
           if (grip) { leftGrip = true; rightGrip = true; }
-          if (yBtn) leftY = true;
         }
       }
     }
@@ -104,12 +100,9 @@ export function createXrControls(renderer, /* unused */_player) {
     const now = performance.now();
     const reload = pollHold(reloadLatch, leftStick && rightStick, now);
     const respawn = pollHold(respawnLatch, leftGrip && rightGrip, now);
-    // Left-Y physics-mode cycle (DEBUG) — simple rising-edge, no hold.
-    const cyclePhys = leftY && !prevLeftY;
-    prevLeftY = leftY;
-    if (reload || respawn || cyclePhys) pulseHaptics(session);
+    if (reload || respawn) pulseHaptics(session);
 
-    return { walkX, walkZ, snapStickX, jumpHeld, dash, reload, respawn, cyclePhys };
+    return { walkX, walkZ, snapStickX, jumpHeld, dash, reload, respawn };
   }
 
   return { readInputs };
