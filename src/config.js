@@ -67,6 +67,16 @@ export const FOV_DEG = 75;
 export const NEAR = 0.05;
 export const FAR = 1000;
 
+// Far layer (skybox + distant parallax scenery) renders in a SEPARATE pass with
+// a much larger frustum, so big parallax backdrops aren't clipped by the main
+// FAR. Meshes tagged `skybox` (see worldConvention.js) are moved to FAR_LAYER and
+// drawn first; the main scene then draws over a cleared depth buffer. The wide
+// clip planes apply in flat mode only — in XR the runtime owns the projection,
+// so XR far geometry is still bounded by FAR. See docs/world-naming-convention.md.
+export const FAR_LAYER = 1;              // three.js layer index for far-pass meshes
+export const SKY_NEAR = 1;               // m
+export const SKY_FAR = 100000;           // m (100 km)
+
 // --- OneDrive / MSAL config ---
 //
 // To use OneDrive sync you must register a Microsoft Azure AD application

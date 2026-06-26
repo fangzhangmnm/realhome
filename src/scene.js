@@ -34,6 +34,12 @@ export function createScene(canvas) {
   const dir = new THREE.DirectionalLight(0xffeecc, 1.1);
   dir.position.set(5, 10, 4);
   scene.add(dir);
+  // Lights must reach BOTH layers: the main scene (layer 0) and the far layer
+  // (FAR_LAYER), which renders in its own pass (see app.js render loop). A light
+  // only affects an object whose layers intersect the light's. Skyboxes are
+  // usually unlit/baked, but this keeps a lit far mesh from going black.
+  hemi.layers.enableAll();
+  dir.layers.enableAll();
 
   // No placeholder geometry. Before the user picks a world, the canvas is
   // pure black — the menu overlay shows on top. Avoids the "what is this

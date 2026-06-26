@@ -19,7 +19,7 @@ import {
   getUsage, getEvictableBytes, evictUnpinnedLRU,
 } from "./worldStore.js";
 import { providers, getProvider } from "./providers.js";
-import { isOneDriveConfigured, SEATED_BUMP_M } from "./config.js";
+import { isOneDriveConfigured, SEATED_BUMP_M, NEAR, FAR, SKY_NEAR, SKY_FAR, FAR_LAYER } from "./config.js";
 
 // Detected at boot: is this user agent capable of immersive-vr sessions?
 // Resolves async — by the time the user clicks a world card on Quest, set.
@@ -1629,8 +1629,45 @@ renderer.setAnimationLoop(() => {
   // Vignette reads current HMD pose vs tracking_origin (HMD pose is live).
   vignette.update(isXR ? player.getVignetteAmount() : 0, renderDt);
 
-  renderer.render(scene, camera);
+  renderLayered(isXR);
 });
+
+// Two-pass render. Pass 1: the far layer (skybox + distant parallax scenery,
+// tagged `skybox` → FAR_LAYER in worldConvention) in a large frustum. Then clear
+// the depth buffer and draw the main scene over it, so the far layer is always
+// behind regardless of its true distance (it keeps its world transform, so
+// parallax survives — it is NOT camera-locked). See
+// docs/world-naming-convention.md § Far layer.
+//
+// Pass 1 uses autoClear (clears color+depth on whichever framebuffer is bound —
+// works for both the default and the XR framebuffer); pass 2 only clears depth.
+//
+// Flat mode swaps the camera clip planes per pass. In XR the runtime owns the
+// projection (depthNear/Far come from the session), so the swap is skipped —
+// the far layer is still isolated by the layer split + depth clear, but its
+// geometry is bounded by the session FAR. (XR multipass needs on-device verify.)
+function renderLayered(isXR) {
+  // Pass 1 — far layer.
+  renderer.autoClear = true;
+  camera.layers.set(FAR_LAYER);
+  if (!isXR) {
+    camera.near = SKY_NEAR;
+    camera.far = SKY_FAR;
+    camera.updateProjectionMatrix();
+  }
+  renderer.render(scene, camera);
+
+  // Pass 2 — main scene over a fresh depth buffer, keeping the far-layer color.
+  renderer.autoClear = false;
+  renderer.clearDepth();
+  camera.layers.set(0);
+  if (!isXR) {
+    camera.near = NEAR;
+    camera.far = FAR;
+    camera.updateProjectionMatrix();
+  }
+  renderer.render(scene, camera);
+}
 
 // --- Service worker + PWA update detection (canonical 4-path pattern) ---
 // Copied from the family pitfall doc (WebPaint docs/pwa-update-detection.md →
