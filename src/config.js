@@ -5,9 +5,10 @@ export const WALK_SPEED = 3;             // m/s, hard clip, no acceleration
 // VR: left thumbstick press). FIXED m/s, NOT a multiple of WALK_SPEED, so tuning
 // walk never drags dash along. Per design: dash is a placebo "I'm hustling"
 // feel, not an objective speed — it doesn't need to be fast. No accel ramp / no
-// stamina. DEBUG: temporarily 10 to investigate high-speed translation judder
-// (see docs/vr-locomotion.md "Fixed-dt physics"); intended resting value ~5.
-export const DASH_SPEED = 10;            // m/s while dashing  (TODO: → 5 after judder fix)
+// stamina. Pinned at 5 after the render-interpolation fix made high speeds
+// smooth (judder was the only reason 10 was ever on the table). 5 m/s ≈ a brisk
+// jog — fast enough to feel like hustling, slow enough to stay comfortable.
+export const DASH_SPEED = 5;             // m/s while dashing
 
 // Jump physics — Minecraft-calibrated, variable-jump-height ("Better Jump" pattern):
 //

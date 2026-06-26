@@ -115,9 +115,9 @@ A fixed top speed on joystick locomotion while a dash input is held — no
 acceleration ramp, no stamina, matching `WALK_SPEED`'s hard-clip feel.
 `config.DASH_SPEED` is an absolute m/s, NOT a multiple of `WALK_SPEED` (so
 tuning walk never drags dash). Dash is a placebo "I'm hustling" feel, not an
-objective speed. `WALK_SPEED = 3`; `DASH_SPEED` is temporarily **10 (debug,
-TODO → ~5)** while investigating high-speed judder (see "Fixed-dt physics"
-below). Threaded through `walkVector(..., dash)`, read from `inputs.dash`.
+objective speed. `WALK_SPEED = 3`, `DASH_SPEED = 5` (pinned after render
+interpolation made speed smooth — judder was the only reason 10 was tried).
+Threaded through `walkVector(..., dash)`, read from `inputs.dash`.
 
 Bindings:
 
