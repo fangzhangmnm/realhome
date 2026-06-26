@@ -186,14 +186,9 @@ walls — resolveCapsule runs per step) + 33 ms interp lag; 60 Hz = 16 cm/step +
 16 ms lag, robust, deterministic, decoupled from 72/90/120 display. Industry-
 normal (Unity FixedUpdate 50, Source 66).
 
-### DEBUG: locomotion-smoothing A/B toggle
-
-`B` (keyboard) / settings-menu "物理步率" button cycles `PHYS_MODES`:
-`fixed 60 + interp (shipping) → update (per-frame) → fixed 60 (raw) → fixed 90
-(raw) →` (wrap). "update" = one variable-dt step per frame (smooth but non-
-deterministic). "raw" = no interpolation (the judder reference). Lets you confirm
-fixed-60-interp feels identical to update on real hardware. Mode shows in the HUD
-(desktop) + the menu button label. Remove this toggle once locked in.
+> Confirmed smooth on Quest 2026-06-26 and locked in as the single locomotion
+> path; the temporary `B`/menu A/B toggle (fixed60-interp / update / raw modes)
+> was removed once interp matched per-frame motion.
 
 ## Snap-turn — pivot always on `player_pos`
 

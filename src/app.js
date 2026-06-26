@@ -37,7 +37,6 @@ const pickButton = document.getElementById("pickButton");
 const worldsListEl = document.getElementById("worldsList");
 const cleanCacheButton = document.getElementById("cleanCacheButton");
 const forceUpdateButton = document.getElementById("forceUpdateButton");
-const physModeButton = document.getElementById("physModeButton");
 const drawerVersion = document.getElementById("drawerVersion");
 const seatedToggle = document.getElementById("seatedToggle");
 const refreshButton = document.getElementById("refreshButton");
@@ -1532,41 +1531,24 @@ renderer.xr.addEventListener("sessionend", () => {
 
 // Render loop. Two clocks:
 //   - render dt (variable, tied to display refresh): drives camera-look,
-//     syncRig, vignette, the render call itself. Representation.
-//   - physics dt (fixed): drives player_pos / player_rot / tracking_origin /
-//     velY / grounded / collision. Each physics step has identical
-//     numerical behavior regardless of render rate (the "academic-rigor"
-//     preference — see docs/principles.md). Accumulator pattern: any
-//     residue < PHYS_DT carries to the next render frame; runs of multiple
-//     steps within one render frame (e.g. after a tab-throttle spike) are
+//     the interpolated rig write, vignette, the render call itself.
+//   - physics dt (fixed 1/60): drives player_pos / player_rot / tracking_origin
+//     / velY / grounded / collision. Each step has identical numerical behavior
+//     regardless of render rate (deterministic, engine-ready). Accumulator
+//     pattern: residue < PHYS_DT carries to the next frame and is the interp
+//     alpha; runs of multiple steps in one frame (tab-throttle spike) are
 //     capped by MAX_PHYS_STEPS to prevent spiral-of-death.
 //
-// PHYS_DT = 1/90 picked because Quest's most common refresh is 90 Hz —
-// one physics step per render frame, no accumulator residue. Desktop 60
-// Hz gets ~1.5 steps/frame on average (clean alternating 1/2). Higher
-// refresh (Quest 120 / desktop 144) gets ~0.6-0.75 steps/frame and may
-// have sub-frame visual jitter on translation — accepted per discussion
-// (translation jitter is imperceptible in VR; rotation isn't, but rotation
-// is per-render-frame already).
-// ── Physics step-rate (locomotion smoothing — DEBUG TOGGLE for A/B) ──────
-// Cycle with B (keyboard) or the settings-menu button. The SHIPPING mode is
-// "fixed 60 + interp": physics runs at a deterministic fixed 60 Hz (engine-
-// ready ground truth) and the render frame INTERPOLATES the locomotion rig
-// between the two latest physics states (alpha = accumulator/dt) → smooth at
-// any display rate without per-frame variable physics. The other modes are
-// the A/B references:
-//   - "update (per-frame)"  : one variable-dt step per render frame (smooth,
-//                             but non-deterministic; jump apex drifts with FPS)
-//   - "fixed 60 (raw)"      : 60 Hz, NO interp — shows the judder interp fixes
-//   - "fixed 90 (raw)"      : the old shipping behaviour
-// The HMD/camera is never interpolated (runtime owns it live). See docs/vr-locomotion.md.
-const PHYS_MODES = [
-  { label: "fixed 60 + interp", dt: 1 / 60, interp: true },
-  { label: "update (per-frame)", dt: null },
-  { label: "fixed 60 (raw)", dt: 1 / 60, interp: false },
-  { label: "fixed 90 (raw)", dt: 1 / 90, interp: false },
-];
-let physModeIdx = 0;
+// Display refresh ≠ 60 used to cause sub-frame translation jitter (visible as
+// dash judder); render interpolation (below) fixes it, so the fixed rate no
+// longer needs to match any particular display refresh.
+// ── Fixed-dt physics (60 Hz) + render interpolation ──────────────────────
+// Physics runs at a deterministic fixed 60 Hz (engine-integration-ready ground
+// truth); the render frame INTERPOLATES the locomotion rig between the two
+// latest physics states (alpha = accumulator/dt) → smooth at any display rate.
+// The HMD/camera is never interpolated (the XR runtime owns it live). See
+// docs/vr-locomotion.md.
+const PHYS_DT = 1 / 60;
 const MAX_PHYS_STEPS = 5;
 const RENDER_DT_CAP = 0.1;     // last-resort safety cap on getDelta (browser tab spikes)
 const clock = new THREE.Clock();
@@ -1580,23 +1562,6 @@ player.captureRigState(_prevRig);
 player.captureRigState(_curRig);
 function _copyRig(src, dst) { dst.x = src.x; dst.y = src.y; dst.z = src.z; dst.rotY = src.rotY; }
 
-function syncPhysModeButton() {
-  if (physModeButton) physModeButton.textContent = `物理步率：${PHYS_MODES[physModeIdx].label}`;
-}
-function cyclePhysMode() {
-  physModeIdx = (physModeIdx + 1) % PHYS_MODES.length;
-  physAccumulator = 0;
-  // Re-seed interp snapshots to current state so switching modes never smears.
-  player.captureRigState(_prevRig);
-  player.captureRigState(_curRig);
-  setStatus(`physics: ${PHYS_MODES[physModeIdx].label}`);
-  console.log(`[phys] ${PHYS_MODES[physModeIdx].label}`);
-  syncPhysModeButton();
-}
-// Settings-menu control (primary surface). Keyboard B kept as a desktop shortcut.
-physModeButton?.addEventListener("click", (e) => { e.stopPropagation(); cyclePhysMode(); });
-document.addEventListener("keydown", (e) => { if (e.code === "KeyB") cyclePhysMode(); });
-syncPhysModeButton();
 renderer.setAnimationLoop(() => {
   const renderDt = Math.min(RENDER_DT_CAP, clock.getDelta());
   const isXR = renderer.xr.isPresenting;
@@ -1639,41 +1604,27 @@ renderer.setAnimationLoop(() => {
   if (isXR && inputs.reload) liveReloadCurrentWorld().catch(() => {});
   if (isXR && inputs.respawn) player.reset();
 
-  // Physics step + rig write, mode-driven. See PHYS_MODES.
-  const mode = PHYS_MODES[physModeIdx];
-  const step = isXR ? player.stepVR : player.stepFlat;
-  if (mode.dt === null) {
-    // "update": one variable-dt step per render frame; rig = latest (no interp).
-    step(inputs, renderDt);
-    player.consumeDiscontinuity();
-    physAccumulator = 0;
-    player.syncRig();
-  } else {
-    // Fixed-dt accumulator. For the interp mode, snapshot the rig state BEFORE
-    // each step into _prevRig (Gaffer "Fix Your Timestep"): after the loop,
-    // _prevRig = state before the last step, _curRig = current state.
-    physAccumulator += renderDt;
-    // Catch teleports that fired BEFORE the step loop this frame (respawn,
-    // first-XR-frame reset, tracking reset) as well as in-loop snap-turns.
-    let stepCount = 0, discontinuity = player.consumeDiscontinuity();
-    while (physAccumulator >= mode.dt && stepCount < MAX_PHYS_STEPS) {
-      if (mode.interp) player.captureRigState(_prevRig);
-      step(inputs, mode.dt);
-      if (player.consumeDiscontinuity()) discontinuity = true;
-      physAccumulator -= mode.dt;
-      stepCount++;
-    }
-    if (stepCount === MAX_PHYS_STEPS) physAccumulator = 0;   // spike → drop residue
-    if (mode.interp) {
-      player.captureRigState(_curRig);
-      // A teleport/snap this frame → render the destination, don't smear across it.
-      if (discontinuity) _copyRig(_curRig, _prevRig);
-      player.writeRigLerp(_prevRig, _curRig, physAccumulator / mode.dt);
-    } else {
-      player.consumeDiscontinuity();
-      player.syncRig();   // raw: latest state, no interpolation (judder reference)
-    }
+  // Fixed-dt physics + render interpolation. Snapshot the rig state BEFORE each
+  // step into _prevRig (Gaffer "Fix Your Timestep"): after the loop, _prevRig =
+  // state before the last step, _curRig = current state, and we render
+  // lerp(prev, cur, alpha). HMD/camera is never interpolated.
+  physAccumulator += renderDt;
+  // Catch teleports that fired BEFORE the step loop this frame (respawn,
+  // first-XR-frame reset, tracking reset) as well as in-loop snap-turns.
+  let stepCount = 0, discontinuity = player.consumeDiscontinuity();
+  while (physAccumulator >= PHYS_DT && stepCount < MAX_PHYS_STEPS) {
+    player.captureRigState(_prevRig);
+    if (isXR) player.stepVR(inputs, PHYS_DT);
+    else      player.stepFlat(inputs, PHYS_DT);
+    if (player.consumeDiscontinuity()) discontinuity = true;
+    physAccumulator -= PHYS_DT;
+    stepCount++;
   }
+  if (stepCount === MAX_PHYS_STEPS) physAccumulator = 0;   // spike → drop residue
+  player.captureRigState(_curRig);
+  // A teleport/snap this frame → render the destination, don't smear across it.
+  if (discontinuity) _copyRig(_curRig, _prevRig);
+  player.writeRigLerp(_prevRig, _curRig, physAccumulator / PHYS_DT);
 
   // Vignette reads current HMD pose vs tracking_origin (HMD pose is live).
   vignette.update(isXR ? player.getVignetteAmount() : 0, renderDt);
