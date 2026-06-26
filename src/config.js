@@ -1,5 +1,5 @@
 // Player physics (matches the VR-mode spec — kept here so flat & VR share)
-export const WALK_SPEED = 1.5;             // m/s, hard clip, no acceleration
+export const WALK_SPEED = 2;               // m/s, hard clip, no acceleration
 
 // Dash — fixed top speed while the dash input is held (flat: Shift / gamepad L3;
 // VR: left thumbstick press). FIXED m/s, NOT a multiple of WALK_SPEED, so tuning
