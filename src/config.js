@@ -49,14 +49,21 @@ export const PLAYER_RADIUS = 0.3;        // m — capsule radius (used in collis
 // in a chair (~1.2m). The user is sitting; the avatar stands.
 export const SEATED_BUMP_M = 0.4;
 
-// Step height: how tall a ledge / threshold / stair the player can climb (or
-// drop off) without jumping while STANDING. It is the standing value of the
-// "belly-sphere lower edge" — the single unified step concept (see collision.js):
-// the wall capsule is built from this Y up, and the ground-snap tolerance is
-// ±this, so a ledge whose riser is below it auto-steps instead of blocking.
-// When crouched the effective step lowers with the body (emergent, not a 2nd
-// constant) — see collision.capsuleSpheres / stepEdge.
+// Step-UP height: how tall a ledge / threshold / stair the foot auto-climbs.
+// It is the levitation of the wall capsule above the foot (the leg zone below
+// is free), and the UPWARD reach of the suspension ground probe. The DOWNWARD
+// reach is a SEPARATE knob (DETECT_GROUND_DIST) — keeping them split is what
+// makes the float robust (see collision.groundProbe).
 export const STEP_HEIGHT = 0.3;          // m — Source ~0.4, Unreal ~0.45, ours a bit lower
+
+// Suspension stick-down: how far BELOW the foot the ground probe still grabs a
+// floor and holds the body on it (kinematic hard-snap — no 2nd-order spring,
+// which would bob the camera and nauseate in VR). SEPARATE from STEP_HEIGHT and
+// crouch-INDEPENDENT on purpose: this is the robustness knob, so the float
+// doesn't drop you the instant the floor drifts past a tiny tolerance (the old
+// ±stepEdge-that-shrank-with-crouch bug). Only when NO floor sits within this
+// reach (a real edge) do you go airborne.
+export const DETECT_GROUND_DIST = 0.3;   // m below the foot the suspension still grabs
 
 // ── Crouch (VR) ──────────────────────────────────────────────────────────
 // The CHARACTER's head height is a state decoupled from the live HMD: the HMD

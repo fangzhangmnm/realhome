@@ -19,6 +19,9 @@ const _triPoint = new THREE.Vector3();
 const _push = new THREE.Vector3();
 const _ray = new THREE.Ray();
 
+// Ground-probe sample offsets (× 0.7·radius): foot centre + a 4-point ring.
+const GROUND_SAMPLES = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]];
+
 export function createCollision(colliderMeshes) {
   // Bake matrixWorld into a cloned geometry so the BVH is in world space.
   // Cloning means disposing the player-facing world later doesn't kill our copy.
@@ -95,7 +98,7 @@ export function createCollision(colliderMeshes) {
   }
 
   // Push `pos` (a Vector3) out of walls / ceiling. pos is mutated in place.
-  // Step Y is handled by groundCheck snapping after this.
+  // Foot Y (step / stick) is handled by groundProbe after this.
   function resolveCapsule(pos, headHeight) {
     const { r, topY, bottomY, midY, degenerate } = capsuleSpheres(headHeight);
     for (let i = 0; i < 5; i++) {
@@ -109,27 +112,43 @@ export function createCollision(colliderMeshes) {
     }
   }
 
-  // Floor Y under `pos` (or null if nothing below). The downward ray is cast
-  // FrontSide — only triangles facing the ray (floor normals point up) count;
-  // an overhead's underside (lintel / ceiling, normal pointing DOWN) is a back
-  // face and is culled, so it can never be mistaken for floor. This is how
-  // Unity (queriesHitBackfaces = false) and SM64 (triangles classified
-  // floor/wall/ceiling by normal.y, find_floor walks only floors) do it, and it
-  // relies on the world's collider-normal convention (back faces aren't rendered
-  // either). Origin is kept just `castUp` above the feet (≈ the belly-sphere
-  // lower edge) as belt-and-suspenders; the caller still filters to ±stepEdge.
-  function groundCheck(pos, castUp) {
-    _ray.origin.set(pos.x, pos.y + castUp, pos.z);
-    _ray.direction.set(0, -1, 0);
-    let closest = null;
-    for (const g of geoms) {
-      const hit = g.boundsTree.raycastFirst(_ray, THREE.FrontSide);
-      if (hit && (!closest || hit.distance < closest.distance)) {
-        closest = hit;
+  // Suspension ground sense (CharacterMotor-style, kinematic). Returns the
+  // highest floor the foot rides on, or null for a real drop (→ airborne).
+  //
+  // The search band is asymmetric and the two reaches are SEPARATE knobs:
+  //   • up to `stepUp` ABOVE the foot  → auto-step height (the leg zone is free)
+  //   • down to `stickDown` BELOW       → how far the foot still grabs ground.
+  // `stickDown` is generous and FIXED (independent of crouch) — that decoupling
+  // is what makes the float robust: you don't fall the instant the floor drifts
+  // past a tiny step tolerance.
+  //
+  // Sampling: foot centre + a 4-point ring at 0.7·radius, so a seam/edge under
+  // one sample doesn't drop the whole probe, and standing on a ledge edge keeps
+  // you up while ANY sample finds floor. Rays are FrontSide (overheads culled),
+  // and the origin starts at foot+stepUp so anything taller than a step is below
+  // the origin and simply ignored. Highest in-band hit wins (stand on the
+  // tallest support under the footprint).
+  function groundProbe(pos, stepUp, stickDown) {
+    const top = pos.y + stepUp;          // ray origin: nothing taller than a step is hit
+    const lo = pos.y - stickDown;        // lowest floor we still grab
+    const off = PLAYER_RADIUS * 0.7;
+    let best = null;
+    for (let i = 0; i < GROUND_SAMPLES.length; i++) {
+      const sx = GROUND_SAMPLES[i][0] * off;
+      const sz = GROUND_SAMPLES[i][1] * off;
+      _ray.origin.set(pos.x + sx, top, pos.z + sz);
+      _ray.direction.set(0, -1, 0);
+      let closest = null;
+      for (const g of geoms) {
+        const hit = g.boundsTree.raycastFirst(_ray, THREE.FrontSide);
+        if (hit && (!closest || hit.distance < closest.distance)) closest = hit;
       }
+      if (!closest) continue;
+      const floorY = top - closest.distance;
+      if (floorY < lo - 1e-4) continue;                 // out of reach below → not support
+      if (best === null || floorY > best) best = floorY;
     }
-    if (!closest) return null;
-    return _ray.origin.y - closest.distance;
+    return best;
   }
 
   // Penetration of a sphere centered at `point` (world coords) with `radius`.
@@ -182,21 +201,6 @@ export function createCollision(colliderMeshes) {
     return hit;
   }
 
-  // Read-only: would the player's HEAD (top capsule sphere) be embedded in a
-  // wall if the rig stood at (x, y, z) with the given CHARACTER head height?
-  // Used to VETO an upward ground-snap onto a ledge too short for the body —
-  // e.g. a window opening lower than the head: snapping the feet onto the sill
-  // would shove the head into the wall above, so we refuse and let the player
-  // fall back instead of clipping in. Only the top sphere is tested — lower
-  // spheres near a wall at floor level are the normal "standing beside a wall"
-  // case and must not block legit step-ups. Fed the CHARACTER head (charHeadY,
-  // not the live HMD): crouching to a real lower charHeadY lets you mount a
-  // short sill, then standing up is gated by clearHeadHeight + blackout.
-  function headBlocked(x, y, z, headHeight, slack = 0.02) {
-    const { r, topY } = capsuleSpheres(headHeight);
-    return spherePenetrates(x, y, z, topY, r, slack);
-  }
-
   // Read-only: how high the CHARACTER head can rise from `lo` toward `hi` (the
   // HMD intention) before its top sphere would hit an overhead. This is a
   // CONTINUOUS (conservative swept-sphere) scan UP from lo — NOT an endpoint
@@ -225,7 +229,7 @@ export function createCollision(colliderMeshes) {
   }
 
   return {
-    resolveCapsule, groundCheck, headPenetration, headBlocked, clearHeadHeight,
+    resolveCapsule, groundProbe, headPenetration, clearHeadHeight,
     dispose, lowerBound,
   };
 }

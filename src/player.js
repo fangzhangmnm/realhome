@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import {
   WALK_SPEED, DASH_SPEED, JUMP_VELOCITY, GRAVITY, GRAVITY_HELD, TERMINAL_VELOCITY,
-  SNAP_TURN_DEG, PLAYER_HEIGHT, PLAYER_RADIUS, STEP_HEIGHT,
+  SNAP_TURN_DEG, PLAYER_HEIGHT, STEP_HEIGHT, DETECT_GROUND_DIST,
   CROUCH_MIN_HEAD, BLACKOUT_GAP, SUBSTEP_LEN, SUBSTEP_CAP, MAX_ROOMSCALE_STEP,
 } from "./config.js";
 
@@ -95,62 +95,54 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
   let _discontinuity = false;
   function consumeDiscontinuity() { const d = _discontinuity; _discontinuity = false; return d; }
 
-  // ── Shared vertical physics: gravity + jump + ground/step + respawn ──
+  // ── Shared vertical physics: suspension + jump + gravity + respawn ──
+  //
+  // Suspension model (kinematic port of the CharacterMotor vehicle-spring, with
+  // the 2nd-order spring replaced by a hard snap — a damped spring bobs the
+  // camera and nauseates in VR). Sense support FIRST, then decide:
+  //   • ground within reach AND not rising → snap the foot onto it, kill velY,
+  //     grounded. No gravity is applied while supported, so a noisy frame can't
+  //     start a fall the way the old "gravity-first, then maybe-snap ±stepEdge"
+  //     did. The stick-down reach (DETECT_GROUND_DIST) is generous and crouch-
+  //     independent → robust float.
+  //   • otherwise (real edge, or rising from a jump) → airborne: gravity.
   function applyVertical(jumpHeld, dt) {
-    if (jumpHeld && grounded) { velY = JUMP_VELOCITY; grounded = false; }
-    const g = (jumpHeld && velY > 0) ? GRAVITY_HELD : GRAVITY;
-    velY -= g * dt;
-    if (velY < -TERMINAL_VELOCITY) velY = -TERMINAL_VELOCITY;
-    player_pos.y += velY * dt;
-
     const col = getCollision();
+
+    // Jump: an explicit upward impulse, only from a supported state.
+    if (jumpHeld && grounded) { velY = JUMP_VELOCITY; grounded = false; }
+
     if (!col) {
       // y=0 infinite floor fallback
+      velY -= GRAVITY * dt;
+      if (velY < -TERMINAL_VELOCITY) velY = -TERMINAL_VELOCITY;
+      player_pos.y += velY * dt;
       if (player_pos.y <= 0) { player_pos.y = 0; velY = 0; grounded = true; }
       return;
     }
-    // The collision body uses the CHARACTER head (charHeadY), not the live HMD.
-    const headHeight = charHeadY;
-    // The belly sphere's lower edge — the one unified "step height": how tall a
-    // ledge auto-steps, and the ground-snap tolerance. 0.3 standing, shrinking
-    // to 0.15 at full crouch (mirrors collision.capsuleSpheres' bottomY − r).
-    const stepEdge = Math.min(STEP_HEIGHT + PLAYER_RADIUS, charHeadY - PLAYER_RADIUS) - PLAYER_RADIUS;
+
+    // Wall / ceiling push (CHARACTER capsule height, not the live HMD).
     const yBeforeResolve = player_pos.y;
-    col.resolveCapsule(player_pos, headHeight);     // wall / ceiling push
-    // Head bonk: if we were rising and the capsule push shoved us back DOWN, we
-    // hit something overhead — kill the upward velocity so the ground-snap below
-    // can't immediately re-lift us into it (the window-sill clip fight).
+    col.resolveCapsule(player_pos, charHeadY);
+    // Head bonk: rising into an overhead pushes us back DOWN → cancel the rise.
     if (velY > 0 && player_pos.y < yBeforeResolve - 1e-4) velY = 0;
 
-    // Cast the ground ray from just above the feet (enough to clear the tallest
-    // auto-step), NOT from head height — a head-high origin can sit above an
-    // overhead (window lintel / low ceiling) and return THAT as the floor, which
-    // reads as a huge drop and falls the player through the real floor. This was
-    // the "stand up high enough inside a window opening → fall through" bug.
-    const floorY = col.groundCheck(player_pos, stepEdge + 0.1);
-    if (floorY !== null) {
-      const d = player_pos.y - floorY;
-      if (velY <= 0 && d >= -stepEdge && d <= stepEdge) {
-        // Veto an UPWARD snap (stepping onto a ledge) that would embed the
-        // CHARACTER head in a wall — you can't stand on a sill shorter than the
-        // character, so fall instead of clipping in. Gated by charHeadY: crouch
-        // to a lower charHeadY and you CAN mount a short sill; standing back up
-        // is then clamped by clearHeadHeight + surfaced by the blackout.
-        // Settling DOWN onto a floor is never vetoed.
-        const snappingUp = floorY > player_pos.y + 1e-4;
-        if (snappingUp && col.headBlocked(player_pos.x, floorY, player_pos.z, charHeadY)) {
-          grounded = false;
-        } else {
-          player_pos.y = floorY;
-          velY = 0;
-          grounded = true;
-        }
-      } else {
-        grounded = false;
-      }
+    // Suspension sense: the foot grabs ground up to STEP_HEIGHT above (auto-step)
+    // and DETECT_GROUND_DIST below (stick). Skip while rising so a jump leaves
+    // the ground cleanly.
+    const groundY = (velY <= 0) ? col.groundProbe(player_pos, STEP_HEIGHT, DETECT_GROUND_DIST) : null;
+    if (groundY !== null) {
+      player_pos.y = groundY;     // hard snap to ride height (1st-order ≡ snap; no VR bob)
+      velY = 0;
+      grounded = true;
     } else {
       grounded = false;
+      const g = (jumpHeld && velY > 0) ? GRAVITY_HELD : GRAVITY;
+      velY -= g * dt;
+      if (velY < -TERMINAL_VELOCITY) velY = -TERMINAL_VELOCITY;
+      player_pos.y += velY * dt;
     }
+
     if (Number.isFinite(col.lowerBound) && player_pos.y < col.lowerBound - RESPAWN_DROP) {
       reset();
     }
