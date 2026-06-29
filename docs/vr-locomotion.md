@@ -1,5 +1,9 @@
 # VR Locomotion — 3-Layer Model
 
+> ℹ️ The 3-layer model below is current. For crouch, the suspension ground, and
+> roomscale/reset handling as of 2026-06-29 see
+> **[character-controller.md](character-controller.md)**.
+
 How RealHome maps player intent + WebXR head-pose tracking to what gets
 rendered. Lives in [src/player.js](../src/player.js).
 

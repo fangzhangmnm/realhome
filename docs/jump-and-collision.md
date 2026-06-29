@@ -1,5 +1,11 @@
 # Jump & Collision — design + the pitfalls
 
+> ⚠️ **Partly superseded (as-of 2026-06-29).** The ground/jump mechanics here
+> (±stepEdge snap-or-fall, head-high ground ray) were rewritten into a raycast
+> suspension + crouch model. See **[character-controller.md](character-controller.md)**
+> for the current authority; the wall push-out and pitfall history below are
+> still accurate.
+
 How the player feels solid in RealHome. Lives in
 [src/player.js](../src/player.js) (jump + ground snap) and
 [src/collision.js](../src/collision.js) (BVH push-out + ground raycast).
