@@ -85,7 +85,7 @@ export const CROUCH_MIN_HEAD = 0.75;     // m — character head floor when crou
 // HMD-vs-character head gap (the user standing taller than the character can,
 // because the character head is pinned under an overhead) at which the comfort
 // vignette is fully black. Past this the near clip plane clips a little — fine.
-export const BLACKOUT_GAP = 0.25;        // m of head dislocation → full vignette
+export const BLACKOUT_GAP = 0.10;        // m of head dislocation → full vignette
 
 // Horizontal move is swept by substepping the discrete capsule resolve: split
 // the frame's displacement into chunks of ~SUBSTEP_LEN and resolve each, capped
