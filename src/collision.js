@@ -109,21 +109,21 @@ export function createCollision(colliderMeshes) {
     }
   }
 
-  // Floor Y under `pos` (or null if nothing below). Cast straight down from a
-  // point just `castUp` above the feet — NOT from head height. raycastFirst
-  // returns the CLOSEST hit below the origin, so a high origin (e.g. tied to a
-  // standing head) can sit ABOVE an overhead surface — a window lintel or a low
-  // ceiling — and that overhead gets returned as "floor" (DoubleSide hits it
-  // from the top), which then reads as a huge drop and the player falls through
-  // the real floor below. `castUp` only needs to clear the tallest auto-step
-  // (≈ stepEdge), keeping the origin safely under any ceiling the player fits
-  // beneath. The caller still filters the result to ±stepEdge.
+  // Floor Y under `pos` (or null if nothing below). The downward ray is cast
+  // FrontSide — only triangles facing the ray (floor normals point up) count;
+  // an overhead's underside (lintel / ceiling, normal pointing DOWN) is a back
+  // face and is culled, so it can never be mistaken for floor. This is how
+  // Unity (queriesHitBackfaces = false) and SM64 (triangles classified
+  // floor/wall/ceiling by normal.y, find_floor walks only floors) do it, and it
+  // relies on the world's collider-normal convention (back faces aren't rendered
+  // either). Origin is kept just `castUp` above the feet (≈ the belly-sphere
+  // lower edge) as belt-and-suspenders; the caller still filters to ±stepEdge.
   function groundCheck(pos, castUp) {
     _ray.origin.set(pos.x, pos.y + castUp, pos.z);
     _ray.direction.set(0, -1, 0);
     let closest = null;
     for (const g of geoms) {
-      const hit = g.boundsTree.raycastFirst(_ray, THREE.DoubleSide);
+      const hit = g.boundsTree.raycastFirst(_ray, THREE.FrontSide);
       if (hit && (!closest || hit.distance < closest.distance)) {
         closest = hit;
       }
