@@ -80,6 +80,13 @@ export const BLACKOUT_GAP = 0.25;        // m of head dislocation → full vigne
 export const SUBSTEP_LEN = 0.3;          // m per sweep substep (~PLAYER_RADIUS)
 export const SUBSTEP_CAP = 8;            // max substeps per frame
 
+// Max plausible roomscale head movement in one physics step (60 Hz). Real
+// walking is ≤ ~0.1 m/step; anything past this is a non-physical pose jump —
+// a Quest "Reset View" recenter or a tracking glitch — which must NOT be
+// applied as locomotion (it drags the body into walls / off ledges → fall
+// through). Past the threshold we just re-anchor tracking_origin and don't move.
+export const MAX_ROOMSCALE_STEP = 0.5;   // m — above this, treat as a tracking jump, not a walk
+
 // Fail fast: if CROUCH_MIN_HEAD drops below 2·PLAYER_RADIUS the crouched
 // single-sphere's lower edge (center − r = CROUCH_MIN_HEAD − 2r) goes negative
 // — the body sphere would sink below the floor. Catch the misconfig here rather

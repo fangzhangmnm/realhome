@@ -2,7 +2,7 @@ import * as THREE from "three";
 import {
   WALK_SPEED, DASH_SPEED, JUMP_VELOCITY, GRAVITY, GRAVITY_HELD, TERMINAL_VELOCITY,
   SNAP_TURN_DEG, PLAYER_HEIGHT, PLAYER_RADIUS, STEP_HEIGHT,
-  CROUCH_MIN_HEAD, BLACKOUT_GAP, SUBSTEP_LEN, SUBSTEP_CAP,
+  CROUCH_MIN_HEAD, BLACKOUT_GAP, SUBSTEP_LEN, SUBSTEP_CAP, MAX_ROOMSCALE_STEP,
 } from "./config.js";
 
 // 3-layer model:
@@ -265,12 +265,21 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
       const iwx =  c * ilx + s * ilz;
       const iwz = -s * ilx + c * ilz;
 
-      _prev.copy(player_pos);
-      sweepMove(iwx, iwz);
-      const awx = player_pos.x - _prev.x;
-      const awz = player_pos.z - _prev.z;
-      tracking_origin.x +=  c * awx - s * awz;
-      tracking_origin.y +=  s * awx + c * awz;
+      // Tracking-jump guard: a per-step roomscale delta bigger than any real
+      // step is a non-physical HMD pose jump (Quest "Reset View" recenter, a
+      // tracking glitch). Applying it as locomotion drags the body through walls
+      // / off ledges → fall through the floor. Absorb it instead: re-anchor
+      // tracking_origin to the current HMD and DON'T move the body.
+      if (Math.hypot(iwx, iwz) > MAX_ROOMSCALE_STEP) {
+        tracking_origin.set(camera.position.x, camera.position.z);
+      } else {
+        _prev.copy(player_pos);
+        sweepMove(iwx, iwz);
+        const awx = player_pos.x - _prev.x;
+        const awz = player_pos.z - _prev.z;
+        tracking_origin.x +=  c * awx - s * awz;
+        tracking_origin.y +=  s * awx + c * awz;
+      }
     }
 
     // (3) Vertical.

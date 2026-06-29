@@ -197,22 +197,27 @@ export function createCollision(colliderMeshes) {
     return spherePenetrates(x, y, z, topY, r, slack);
   }
 
-  // Read-only: the highest character head height in [lo, hi] whose TOP sphere
-  // stays clear of geometry at (x, y, z). Used to resolve the crouch: the HMD
-  // (intention) wants to rise to `hi`, but an overhead keeps the CHARACTER head
-  // clamped — return how far it can actually stand. Fast path when `hi` is
-  // already clear (the common case); otherwise step down in 5 cm increments to
-  // the first clear height. The character head pinned below the HMD is what
-  // drives the comfort blackout.
+  // Read-only: how high the CHARACTER head can rise from `lo` toward `hi` (the
+  // HMD intention) before its top sphere would hit an overhead. This is a
+  // CONTINUOUS (conservative swept-sphere) scan UP from lo — NOT an endpoint
+  // test. An endpoint test is wrong: if `hi` lands in a void ABOVE a thin wall
+  // (e.g. the room space over a window lintel), the head would teleport THROUGH
+  // the wall to that clear spot. Scanning up and stopping at the first blocked
+  // sample keeps "the head sphere never enters geometry" an invariant — the head
+  // bonks the lintel and stays clamped (→ blackout) instead of popping through.
+  // The 5 cm step is far smaller than the head sphere's 0.6 m diameter, so the
+  // samples overlap and nothing thin slips between them.
   function clearHeadHeight(x, y, z, lo, hi, slack = 0.02) {
     const r = PLAYER_RADIUS;
     if (hi <= lo) return hi;
-    if (!spherePenetrates(x, y, z, hi - r, r, slack)) return hi;
     const STEP = 0.05;
-    for (let h = hi - STEP; h > lo; h -= STEP) {
-      if (!spherePenetrates(x, y, z, h - r, r, slack)) return h;
+    let reached = lo;                          // lo is clear by invariant (last frame held it)
+    for (let h = lo + STEP; h < hi; h += STEP) {
+      if (spherePenetrates(x, y, z, h - r, r, slack)) return reached;   // hit → stop below it
+      reached = h;
     }
-    return lo;
+    if (!spherePenetrates(x, y, z, hi - r, r, slack)) return hi;        // path clear all the way
+    return reached;
   }
 
   function dispose() {
