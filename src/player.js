@@ -115,8 +115,18 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
         // Veto an UPWARD snap (stepping onto a ledge) that would embed the head
         // in a wall — you can't stand on a sill shorter than your body, so fall
         // instead of clipping in. Settling DOWN onto a floor is never vetoed.
+        //
+        // Gate by STANDING height, not the live HMD height: a VR user could
+        // physically crouch (low live headHeight) to pass the check, snap onto
+        // the sill, then stand up — and roomscale stand-up doesn't re-run this
+        // veto, so the head would clip into the wall anyway. max(live, PLAYER_
+        // HEIGHT) never dips below standing height (crouching can't sneak in)
+        // and rises for a taller-than-nominal user (no stand-up clip). The
+        // actual capsule push / head-bonk above still use the live head — those
+        // act on the REAL head and should.
         const snappingUp = floorY > player_pos.y + 1e-4;
-        if (snappingUp && col.headBlocked(player_pos.x, floorY, player_pos.z, headHeight)) {
+        const gateHeight = Math.max(headHeight, PLAYER_HEIGHT);
+        if (snappingUp && col.headBlocked(player_pos.x, floorY, player_pos.z, gateHeight)) {
           grounded = false;
         } else {
           player_pos.y = floorY;
