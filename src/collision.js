@@ -139,9 +139,50 @@ export function createCollision(colliderMeshes) {
     return maxOverlap;
   }
 
+  // Read-only: would a sphere of `radius` centered at (x, y + offsetY, z)
+  // penetrate any collider by more than `slack`? Halts on the first hit (no
+  // depth accumulation — caller only needs a yes/no). Sibling of
+  // pushSphereOnce / headPenetration but non-mutating.
+  function spherePenetrates(x, y, z, offsetY, radius, slack) {
+    _sphereCenter.set(x, y + offsetY, z);
+    _box.min.set(_sphereCenter.x - radius, _sphereCenter.y - radius, _sphereCenter.z - radius);
+    _box.max.set(_sphereCenter.x + radius, _sphereCenter.y + radius, _sphereCenter.z + radius);
+    const thr = radius - slack;          // overlap deeper than slack = blocked
+    const thrSq = thr * thr;
+    let hit = false;
+    for (const g of geoms) {
+      g.boundsTree.shapecast({
+        intersectsBounds: (box) => !hit && box.intersectsBox(_box),
+        intersectsTriangle: (tri) => {
+          tri.closestPointToPoint(_sphereCenter, _triPoint);
+          if (_sphereCenter.distanceToSquared(_triPoint) < thrSq) { hit = true; return true; }  // true → halt
+          return false;
+        },
+      });
+      if (hit) break;
+    }
+    return hit;
+  }
+
+  // Read-only: would the player's HEAD (top capsule sphere) be embedded in a
+  // wall if the rig stood at (x, y, z)? Used to VETO an upward ground-snap onto
+  // a ledge too short for the body — e.g. a window opening lower than head
+  // height: snapping the feet onto the sill would shove the head into the wall
+  // above, so we refuse the snap and let the player fall back instead of
+  // clipping in. Only the top sphere is tested on purpose — lower spheres near
+  // a wall at floor level are the normal "standing beside a wall" case and must
+  // not block legit step-ups. headHeight is the live head height (HMD in VR),
+  // so ducking under a low opening naturally clears it.
+  function headBlocked(x, y, z, headHeight, slack = 0.02) {
+    const r = PLAYER_RADIUS;
+    const bottomY = STEP_HEIGHT + r;
+    const topY = Math.max(headHeight - r, bottomY);
+    return spherePenetrates(x, y, z, topY, r, slack);
+  }
+
   function dispose() {
     for (const g of geoms) g.dispose();
   }
 
-  return { resolveCapsule, groundCheck, headPenetration, dispose, lowerBound };
+  return { resolveCapsule, groundCheck, headPenetration, headBlocked, dispose, lowerBound };
 }

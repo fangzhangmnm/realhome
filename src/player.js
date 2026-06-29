@@ -101,14 +101,28 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
       return;
     }
     const headHeight = camera.position.y;
-    col.resolveCapsule(player_pos, headHeight);     // ceiling push
+    const yBeforeResolve = player_pos.y;
+    col.resolveCapsule(player_pos, headHeight);     // wall / ceiling push
+    // Head bonk: if we were rising and the capsule push shoved us back DOWN, we
+    // hit something overhead — kill the upward velocity so the ground-snap below
+    // can't immediately re-lift us into it (the window-sill clip fight).
+    if (velY > 0 && player_pos.y < yBeforeResolve - 1e-4) velY = 0;
+
     const floorY = col.groundCheck(player_pos, headHeight);
     if (floorY !== null) {
       const d = player_pos.y - floorY;
       if (velY <= 0 && d >= -STEP_HEIGHT && d <= STEP_HEIGHT) {
-        player_pos.y = floorY;
-        velY = 0;
-        grounded = true;
+        // Veto an UPWARD snap (stepping onto a ledge) that would embed the head
+        // in a wall — you can't stand on a sill shorter than your body, so fall
+        // instead of clipping in. Settling DOWN onto a floor is never vetoed.
+        const snappingUp = floorY > player_pos.y + 1e-4;
+        if (snappingUp && col.headBlocked(player_pos.x, floorY, player_pos.z, headHeight)) {
+          grounded = false;
+        } else {
+          player_pos.y = floorY;
+          velY = 0;
+          grounded = true;
+        }
       } else {
         grounded = false;
       }
