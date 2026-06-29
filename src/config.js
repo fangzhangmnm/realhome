@@ -65,6 +65,14 @@ export const STEP_HEIGHT = 0.3;          // m — Source ~0.4, Unreal ~0.45, our
 // reach (a real edge) do you go airborne.
 export const DETECT_GROUND_DIST = 0.3;   // m below the foot the suspension still grabs
 
+// Ground follow: the foot moves toward the probed floor with a 1st-order ease
+// (time constant τ), NEVER an instant snap — the character body is a physical
+// entity that always moves continuously (no teleport except explicit respawn /
+// world-load). On flat ground the target ≈ current Y so this is a no-op; a step
+// up/down eases over ~τ instead of a one-frame jump (a teleport would bob the
+// VR camera). 1st-order (no velocity term) so there's no overshoot/bounce.
+export const GROUND_FOLLOW_TAU = 0.06;   // s — foot→floor ease time constant
+
 // ── Crouch (VR) ──────────────────────────────────────────────────────────
 // The CHARACTER's head height is a state decoupled from the live HMD: the HMD
 // is intention input, the character crouches to fit. CROUCH_MIN_HEAD is the

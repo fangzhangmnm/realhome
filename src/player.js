@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import {
   WALK_SPEED, DASH_SPEED, JUMP_VELOCITY, GRAVITY, GRAVITY_HELD, TERMINAL_VELOCITY,
-  SNAP_TURN_DEG, PLAYER_HEIGHT, STEP_HEIGHT, DETECT_GROUND_DIST,
+  SNAP_TURN_DEG, PLAYER_HEIGHT, STEP_HEIGHT, DETECT_GROUND_DIST, GROUND_FOLLOW_TAU,
   CROUCH_MIN_HEAD, BLACKOUT_GAP, SUBSTEP_LEN, SUBSTEP_CAP, MAX_ROOMSCALE_STEP,
 } from "./config.js";
 
@@ -132,7 +132,12 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
     // the ground cleanly.
     const groundY = (velY <= 0) ? col.groundProbe(player_pos, STEP_HEIGHT, DETECT_GROUND_DIST) : null;
     if (groundY !== null) {
-      player_pos.y = groundY;     // hard snap to ride height (1st-order ≡ snap; no VR bob)
+      // Move the foot to the floor with a 1st-order ease — NEVER an instant snap.
+      // The body is a physical entity: continuous displacement only (a teleport
+      // would bob the VR camera). Flat ground → target ≈ y → no-op; a step eases
+      // over ~τ. velY is killed (we're supported; the ease, not gravity, owns Y).
+      const a = 1 - Math.exp(-dt / GROUND_FOLLOW_TAU);
+      player_pos.y += (groundY - player_pos.y) * a;
       velY = 0;
       grounded = true;
     } else {
