@@ -122,7 +122,12 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
     // can't immediately re-lift us into it (the window-sill clip fight).
     if (velY > 0 && player_pos.y < yBeforeResolve - 1e-4) velY = 0;
 
-    const floorY = col.groundCheck(player_pos, headHeight);
+    // Cast the ground ray from just above the feet (enough to clear the tallest
+    // auto-step), NOT from head height — a head-high origin can sit above an
+    // overhead (window lintel / low ceiling) and return THAT as the floor, which
+    // reads as a huge drop and falls the player through the real floor. This was
+    // the "stand up high enough inside a window opening → fall through" bug.
+    const floorY = col.groundCheck(player_pos, stepEdge + 0.1);
     if (floorY !== null) {
       const d = player_pos.y - floorY;
       if (velY <= 0 && d >= -stepEdge && d <= stepEdge) {

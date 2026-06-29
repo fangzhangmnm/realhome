@@ -109,11 +109,17 @@ export function createCollision(colliderMeshes) {
     }
   }
 
-  // Floor Y under `pos` (or null if no floor within head-height + ε). Cast from
-  // above the head so a tall step in front doesn't shadow the floor below the
-  // feet.
-  function groundCheck(pos, headHeight) {
-    _ray.origin.set(pos.x, pos.y + headHeight, pos.z);
+  // Floor Y under `pos` (or null if nothing below). Cast straight down from a
+  // point just `castUp` above the feet — NOT from head height. raycastFirst
+  // returns the CLOSEST hit below the origin, so a high origin (e.g. tied to a
+  // standing head) can sit ABOVE an overhead surface — a window lintel or a low
+  // ceiling — and that overhead gets returned as "floor" (DoubleSide hits it
+  // from the top), which then reads as a huge drop and the player falls through
+  // the real floor below. `castUp` only needs to clear the tallest auto-step
+  // (≈ stepEdge), keeping the origin safely under any ceiling the player fits
+  // beneath. The caller still filters the result to ±stepEdge.
+  function groundCheck(pos, castUp) {
+    _ray.origin.set(pos.x, pos.y + castUp, pos.z);
     _ray.direction.set(0, -1, 0);
     let closest = null;
     for (const g of geoms) {
