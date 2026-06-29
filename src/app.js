@@ -124,7 +124,7 @@ const current = {
   // The remoteEtag of the bytes currently PARSED INTO THE SCENE. Distinct
   // from the IDB record's etag, which a background refresh can bump ahead of
   // what's rendered. handleEnter / liveReloadCurrentWorld compare the two to
-  // decide whether a re-parse is needed (see docs/world-transitions.md).
+  // decide whether a re-parse is needed (see docs/20260524-world-transitions.md).
   loadedEtag: null,
 };
 let loading = false;
@@ -181,7 +181,7 @@ document.addEventListener("keydown", (e) => {
 // XR view) so the user can pick a different world without leaving VR.
 // When NOT granted, hide the overlay — the DOM is invisible in immersive
 // anyway, and Quest's "running in background" panel takes over.
-// In-VR menu is not supported on Quest browser today. See docs/user-flows.md.
+// In-VR menu is not supported on Quest browser today. See docs/20260522-user-flows.md.
 // The menu DOM is hidden during XR; user exits via Meta button to switch.
 renderer.xr.addEventListener("sessionstart", () => {
   document.body.classList.add("xr-active");
@@ -424,7 +424,7 @@ async function handleCache(source, remoteId, name, thumbnailRemoteId = null) {
 // × button. Local-cache delete only (does NOT touch the cloud). For
 // remote-backed records we write a tombstone pinned to the current etag
 // so the next mergeRemoteList won't silently re-discover and resurrect
-// the row — see docs/sync-constraints.md constraint #2 + etag-pinning.
+// the row — see docs/20260524-sync-constraints.md constraint #2 + etag-pinning.
 // A later cloud-side change to the same item (new etag) invalidates
 // the tombstone automatically (we re-discover the new version).
 async function handleDelete(id) {
@@ -772,7 +772,7 @@ function installWorld(result, name) {
   if (!renderer.xr.isPresenting) camera.quaternion.identity();
   hudName.textContent = name;
   // Updating document.title so the Quest "running in background" panel
-  // header reads cleanly (it inherits the tab title). See docs/ui-layers.md.
+  // header reads cleanly (it inherits the tab title). See docs/20260521-ui-layers.md.
   document.title = `RealHome — ${name}`;
   const note = [];
   if (result.skyboxes.length) note.push(`skybox×${result.skyboxes.length}`);
@@ -785,7 +785,7 @@ function setStatus(s) { hudStatus.textContent = s; }
 
 // Loading indicator. Always DOM-only now: the load-first flow keeps the
 // user in menu state until the world is ready, so the DOM progress bar
-// is always visible. No more 3D loading panel — see docs/user-flows.md.
+// is always visible. No more 3D loading panel — see docs/20260522-user-flows.md.
 function showLoading(label, detail = "", fraction = -1) {
   const text = detail ? `${label} — ${detail}` : label;
   showProgress(text, fraction);
@@ -966,7 +966,7 @@ async function refreshThumbnailForRec(rec, idOverride = null) {
 }
 
 // Background sync: per-provider merge + cached-record content refresh.
-// Per docs/sync-constraints.md:
+// Per docs/20260524-sync-constraints.md:
 //   - List failure → no record mutation at all (U3 — only successful
 //     lists can flip remoteFound)
 //   - Empty-list safety net (#2 detail) — refuse to batch-ghost when 0
@@ -1545,7 +1545,7 @@ function formatRelativeTime(ts) {
 // Quest's "Reset View" (long-press Meta button) fires `reset` on the
 // XRReferenceSpace. We must compensate or roomscale interprets the
 // apparent HMD jump as user-walked → player_pos drags into invalid
-// space → user appears to fall through the floor. See docs/vr-locomotion.md.
+// space → user appears to fall through the floor. See docs/20260521-vr-locomotion.md.
 //
 // event.transform: an XRRigidTransform describing the new origin's pose
 // in the OLD frame's coords. The yaw component tells us how much the
@@ -1596,7 +1596,7 @@ renderer.xr.addEventListener("sessionend", () => {
 // truth); the render frame INTERPOLATES the locomotion rig between the two
 // latest physics states (alpha = accumulator/dt) → smooth at any display rate.
 // The HMD/camera is never interpolated (the XR runtime owns it live). See
-// docs/vr-locomotion.md.
+// docs/20260521-vr-locomotion.md.
 const PHYS_DT = 1 / 60;
 const MAX_PHYS_STEPS = 5;
 const RENDER_DT_CAP = 0.1;     // last-resort safety cap on getDelta (browser tab spikes)
@@ -1685,7 +1685,7 @@ renderer.setAnimationLoop(() => {
 // aren't clipped by the main FAR. Far meshes live on BOTH layer 0 and FAR_LAYER
 // (worldConvention) — layer 0 so XR's per-eye cameras (which only ever see
 // layers {0,1}/{0,2}) can render them in both eyes, FAR_LAYER so flat mode can
-// isolate them into their own pass. See docs/world-naming-convention.md.
+// isolate them into their own pass. See docs/20260626-world-naming-convention.md.
 //
 // XR: ONE pass. The runtime owns the projection (its FAR is fixed), so a wider
 // far frustum is impossible — the two-pass would buy nothing. Depth is ON, so
@@ -1729,8 +1729,8 @@ function renderLayered(isXR) {
 }
 
 // --- Service worker + PWA update detection (canonical 4-path pattern) ---
-// Copied from the family pitfall doc (WebPaint docs/pwa-update-detection.md →
-// our docs/pwa-updates.md). Two hard lessons baked in:
+// Copied from the family pitfall doc (WebPaint docs/20260526-pwa-update-detection.md →
+// our docs/20260625-pwa-updates.md). Two hard lessons baked in:
 //   (#0) register at MODULE TOP-LEVEL, NOT inside window.load — with a
 //        type=module entry the `load` event may have already fired by the time
 //        this runs, so the listener never fires and the SW never registers
@@ -1785,7 +1785,7 @@ updateReload.addEventListener("click", () => {
 // Force update (清缓存重启) — the canonical "PWA stuck on an old version" escape
 // hatch. Unregister all SWs + wipe Cache Storage + reload. Worlds live in
 // IndexedDB and are NOT touched. Guarded on being online: clearing the cache
-// while offline would leave nothing to reload from. See docs/pwa-updates.md.
+// while offline would leave nothing to reload from. See docs/20260625-pwa-updates.md.
 async function forcePwaReset() {
   if (!navigator.onLine) { setStatus("离线，先联网再强制更新"); return; }
   setStatus("清缓存重启中…");

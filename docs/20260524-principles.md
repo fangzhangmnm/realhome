@@ -190,7 +190,7 @@ When the user-visible content depends on per-asset data, prefer asset-
 side conventions (artist drops a file alongside the main asset) over
 runtime-generating it.
 
-Sidecar PNG thumbnails (see `docs/sidecar-thumbnails.md`) are an
+Sidecar PNG thumbnails (see `docs/20260524-sidecar-thumbnails.md`) are an
 instance. Runtime rendering was fragile across XR boundaries; sidecar
 is just a file lookup with `<img onerror>` fallback. The artist owns
 the preview frame — usually they have a better idea than our auto-

@@ -2,7 +2,7 @@
 
 > ⚠️ **Partly superseded (as-of 2026-06-29).** The ground/jump mechanics here
 > (±stepEdge snap-or-fall, head-high ground ray) were rewritten into a raycast
-> suspension + crouch model. See **[character-controller.md](character-controller.md)**
+> suspension + crouch model. See **[20260629-character-controller.md](20260629-character-controller.md)**
 > for the current authority; the wall push-out and pitfall history below are
 > still accurate.
 
@@ -271,7 +271,7 @@ yanked back, which is part of feeling solid in big rooms.
 
 ## Interaction with the 3-layer VR model
 
-See [docs/vr-locomotion.md](vr-locomotion.md). Collision operates on
+See [docs/20260521-vr-locomotion.md](20260521-vr-locomotion.md). Collision operates on
 `player_pos` (gameplay SSoT, top layer) only. It doesn't know about the
 rig, the camera, or VR vs flat:
 
@@ -305,4 +305,4 @@ Always: collision queries get `player_pos`, never `rig.position`.
 - [src/player.js](../src/player.js) — applyVertical, walkVector, updateFlat / updateVR
 - [src/collision.js](../src/collision.js) — createCollision, resolveCapsule, groundCheck
 - [src/config.js](../src/config.js) — JUMP_VELOCITY, GRAVITY, STEP_HEIGHT, PLAYER_RADIUS
-- [docs/vr-locomotion.md](vr-locomotion.md) — the 3-layer VR model collision plugs into
+- [docs/20260521-vr-locomotion.md](20260521-vr-locomotion.md) — the 3-layer VR model collision plugs into

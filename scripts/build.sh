@@ -3,7 +3,7 @@
 # 抄自 WebPaint scripts/build.sh（家族 mature paradigm），改 ENTRY + bundle 名 + externals。
 #
 # 用法：编辑 src/ → 跑这个 → git commit && git push origin main
-#   (push main → GH Actions 部署到 /dev/；promote 到 prod 见 docs/dev-prod-split.md)
+#   (push main → GH Actions 部署到 /dev/；promote 到 prod 见 docs/20260625-dev-prod-split.md)
 #
 # RealHome 差异 vs WebPaint：
 #   - three / three-mesh-bvh / @azure/msal-browser 走 importmap 在运行时解析，**不进 bundle**

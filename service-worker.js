@@ -7,7 +7,7 @@
 // RealHome-specific rules layered on the canonical:
 //   - .glb / .gltf are PASSTHROUGH (never SW-cached): the app's IndexedDB sync
 //     owns world freshness via Graph If-None-Match. SW caching would fight that
-//     — see docs/sync-constraints.md. NEVER let worlds into the SW cache.
+//     — see docs/20260524-sync-constraints.md. NEVER let worlds into the SW cache.
 //   - /dev/ is passthrough (the prod SW's scope covers /realhome/dev/, but dev
 //     must always hit network; the deploy workflow also strips the SW there).
 //   - three.js ES modules ARE precached — they load at first render via the

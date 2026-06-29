@@ -235,5 +235,5 @@ harmless: the user is standing still and dash only scales joystick glide.)
 - [src/scene.js](../src/scene.js) — `setWorld`
 - [src/player.js](../src/player.js) — `setSpawnPoint`, `reset`
 - [src/worldLoader.js](../src/worldLoader.js) — `extractSpawn`
-- [docs/user-flows.md](user-flows.md) — the whole state model this
+- [docs/20260522-user-flows.md](20260522-user-flows.md) — the whole state model this
   fits into

@@ -232,6 +232,6 @@ Deferred: revisit when we actually add per-world settings.
 - [src/providers.js](../src/providers.js) — OneDrive provider
 - [src/app.js](../src/app.js) — `loadFile` / `cacheWorld` /
   `checkRemoteUpdates` / `maybeUploadToOneDrive`
-- [docs/msal-onedrive-patterns.md](msal-onedrive-patterns.md) — auth
+- [docs/20260521-msal-onedrive-patterns.md](20260521-msal-onedrive-patterns.md) — auth
   layer patterns
-- [docs/onedrive-setup.md](onedrive-setup.md) — Azure registration
+- [docs/20260521-onedrive-setup.md](20260521-onedrive-setup.md) — Azure registration

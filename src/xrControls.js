@@ -9,7 +9,7 @@
 //   right A / B          → jump            left thumbstick     → dash (hold)
 //   BOTH thumbsticks pressed (L3+R3) held ≥ RELOAD_HOLD_MS → live-reload world
 //   BOTH grips held ≥ RESPAWN_HOLD_MS                      → respawn to spawn
-//     (each edge-fired once per press; see docs/world-transitions.md.)
+//     (each edge-fired once per press; see docs/20260524-world-transitions.md.)
 //   Note: L3 alone = dash, so during the L3+R3 reload combo dash is also
 //   active — harmless, since the user is standing still to invoke it and dash
 //   only scales joystick glide.

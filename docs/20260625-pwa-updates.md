@@ -1,7 +1,7 @@
 # PWA 更新检测 + 强制更新（RealHome）
 
 > as-of 2026-06-25。**为什么/完整论证**见 canonical：
-> `../../20260524 WebPaint/docs/pwa-update-detection.md`（四件套，少一件都收 user 抱怨）。
+> `../../20260524 WebPaint/docs/20260526-pwa-update-detection.md`（四件套，少一件都收 user 抱怨）。
 > 本文只记 RealHome 怎么挂的 + 差异。
 
 四件套（都在 `src/app.js` 末尾 SW 段）：

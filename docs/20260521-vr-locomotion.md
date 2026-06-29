@@ -2,7 +2,7 @@
 
 > ℹ️ The 3-layer model below is current. For crouch, the suspension ground, and
 > roomscale/reset handling as of 2026-06-29 see
-> **[character-controller.md](character-controller.md)**.
+> **[20260629-character-controller.md](20260629-character-controller.md)**.
 
 How RealHome maps player intent + WebXR head-pose tracking to what gets
 rendered. Lives in [src/player.js](../src/player.js).
@@ -147,7 +147,7 @@ branch, not the roomscale branch.
 | left thumbstick press (`buttons[3]`) | dash (hold) |
 | right stick X | snap-turn |
 | right A / B (`buttons[4]`/`[5]`) | jump |
-| both thumbsticks pressed L3+R3 (`buttons[3]`) held ~0.7 s | live-reload current world (see [world-transitions.md](world-transitions.md)) |
+| both thumbsticks pressed L3+R3 (`buttons[3]`) held ~0.7 s | live-reload current world (see [20260524-world-transitions.md](20260524-world-transitions.md)) |
 | both grips (`buttons[1]`) held ~0.5 s | respawn to spawn marker (`player.reset`) |
 ## Render interpolation (smooth motion on fixed-dt physics)
 
@@ -267,7 +267,7 @@ gameplay trajectory. The variable-dt-with-cap approach (what we had
 before) drifts on dt spikes — semi-implicit Euler's apex error is O(dt),
 so a 50ms cap means a 14cm jump-apex variance under spike conditions.
 
-Per docs/principles.md "academic-rigor robustness" + saved feedback
+Per docs/20260524-principles.md "academic-rigor robustness" + saved feedback
 memory: each step preserves its invariants, no "cap and hope."
 
 **Translation jitter at mismatched render/physics rates:** when a

@@ -116,5 +116,5 @@ and the app re-prompts for sign-in.
 
 ## See also
 
-- [docs/msal-onedrive-patterns.md](msal-onedrive-patterns.md) — the
+- [docs/20260521-msal-onedrive-patterns.md](20260521-msal-onedrive-patterns.md) — the
   patterns and gotchas that informed the auth/graph code design.

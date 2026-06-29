@@ -79,7 +79,7 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
   // body stands in the world") between the two most recent physics states so
   // motion is smooth at any display rate. The HMD/camera pose is NEVER
   // interpolated — the XR runtime owns it live; interpolating head tracking
-  // would add latency = sickness. See docs/vr-locomotion.md.
+  // would add latency = sickness. See docs/20260521-vr-locomotion.md.
   //
   // Position is lerped; rotation is NOT (snap-turn must stay instant, and
   // flat-mode turn lives on the camera, not the rig) → take the latest rotY.
@@ -215,7 +215,7 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
   // loop) runs syncRig() once per render frame after one-or-more steps.
   // Splitting state-update from representation-write lets us run physics
   // at fixed dt while rendering / camera-look stay per-render-frame.
-  // See docs/vr-locomotion.md "Fixed-dt physics" + memory rule
+  // See docs/20260521-vr-locomotion.md "Fixed-dt physics" + memory rule
   // "academic-rigor robustness".
   function stepFlat(inputs, dt) {
     charHeadY = PLAYER_HEIGHT;     // flat: no crouch, body is always standing height

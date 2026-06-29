@@ -3,7 +3,7 @@
 # 好 dist/realhome-<hash>.mjs（人手跑 scripts/build.sh 后 commit）。本 workflow 只「组合两分支
 # → upload」，**不在 CI 里 build**，快且确定。
 #
-# 第一次 setup（见 docs/dev-prod-split.md，顺序要紧——origin/main 现在还是 prod）：
+# 第一次 setup（见 docs/20260625-dev-prod-split.md，顺序要紧——origin/main 现在还是 prod）：
 #   ① 建 prod 分支 = 当前线上：git branch prod <当前线上 sha> && git push origin prod
 #   ② GitHub Settings → Pages → Source 改 "GitHub Actions"（不是 deploy-from-branch）
 #   ③ 之后 push main 才安全（此前 push main 会直接上 prod）

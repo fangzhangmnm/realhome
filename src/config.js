@@ -128,7 +128,7 @@ export const FAR = 1000;
 // SEPARATE pass with a much larger frustum so big parallax backdrops aren't
 // clipped by the main FAR; the main scene then draws over a cleared depth buffer.
 // In XR the runtime owns the projection, so it's a single normal pass (far
-// geometry bounded by the session FAR). See docs/world-naming-convention.md and
+// geometry bounded by the session FAR). See docs/20260626-world-naming-convention.md and
 // app.js renderLayered.
 //
 // FAR_LAYER MUST be ≥ 3: in WebXR three.js reserves layer 1 = left eye, layer 2 =
@@ -144,7 +144,7 @@ export const SKY_FAR = 100000;           // m (100 km)
 //
 // To use OneDrive sync you must register a Microsoft Azure AD application
 // (free, personal Microsoft account works) and paste your Application
-// (client) ID below. Step-by-step: docs/onedrive-setup.md.
+// (client) ID below. Step-by-step: docs/20260521-onedrive-setup.md.
 //
 // `Files.ReadWrite.AppFolder` scope = the app sees ONLY a `RealHome` folder
 // inside the user's OneDrive Apps/. We never see their other files. Folder

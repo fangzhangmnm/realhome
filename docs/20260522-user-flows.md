@@ -1,8 +1,8 @@
 # User flows
 
 The complete state model for what RealHome looks like to the user. Lives
-between the rendering plumbing (`docs/ui-layers.md`), the sync semantics
-(`docs/sync-strategies.md`), and the VR locomotion (`docs/vr-locomotion.md`).
+between the rendering plumbing (`docs/20260521-ui-layers.md`), the sync semantics
+(`docs/20260521-sync-strategies.md`), and the VR locomotion (`docs/20260521-vr-locomotion.md`).
 
 ## States
 
@@ -62,7 +62,7 @@ Transitions:
 | **InWorld** | Immersive-VR session. Headset shows stereo render. Quest's docked browser panel shows "running in background" placeholder. | Right thumbstick → walk + snap-turn. Trigger / face button → jump. |
 
 Transitions:
-- Menu → InWorld: tap a world card → world loads in menu state (DOM progress bar visible) → enter VR session (gesture-driven; or enter-prompt fallback if load was slow). See [docs/world-transitions.md](world-transitions.md).
+- Menu → InWorld: tap a world card → world loads in menu state (DOM progress bar visible) → enter VR session (gesture-driven; or enter-prompt fallback if load was slow). See [docs/20260524-world-transitions.md](20260524-world-transitions.md).
 - InWorld → Menu: Meta button → quit XR session. Quest returns to 2D browser panel where the menu was.
 
 **Limitation:** the menu is NOT visible during an immersive-vr session.
@@ -160,15 +160,15 @@ pointer-lock / VR session.
 The redirect costs us in-page state (selection, scroll, drawer state) —
 but the menu rebuilds entirely from IDB + providers, so there's nothing
 meaningful to lose. Background sign-in flows ("silent SSO") are dropped
-on purpose, see `docs/msal-onedrive-patterns.md` pattern 5.
+on purpose, see `docs/20260521-msal-onedrive-patterns.md` pattern 5.
 
 ## Why no in-VR menu (decision log)
 
-See [docs/ui-layers.md](ui-layers.md) "In-VR menu: decided to defer"
+See [docs/20260521-ui-layers.md](20260521-ui-layers.md) "In-VR menu: decided to defer"
 for the full rationale. Short version: dom-overlay didn't work on
 Quest, HTMLMesh would feel like a floating "second HUD" next to
 Quest's docking panel, and native 3D panels would create a second
-SSoT (rejected on principle — see [docs/principles.md](principles.md)
+SSoT (rejected on principle — see [docs/20260524-principles.md](20260524-principles.md)
 rule 1).
 
 ## What lives in the menu vs in-world
@@ -219,8 +219,8 @@ rule 1).
 - [src/app.js](../src/app.js) — event wiring, state transitions
 - [src/styles.css](../src/styles.css) — Menu / Drawer / Loading visuals
 - [index.html](../index.html) — DOM layout
-- [docs/ui-layers.md](ui-layers.md) — rendering-mode details (flat vs VR plumbing)
-- [docs/world-transitions.md](world-transitions.md) — load order, user-gesture, enter-prompt
-- [docs/sync-strategies.md](sync-strategies.md) — OneDrive sync rules
-- [docs/vr-locomotion.md](vr-locomotion.md) — 3-layer VR rig
-- [docs/principles.md](principles.md) — cross-cutting rules driving the design
+- [docs/20260521-ui-layers.md](20260521-ui-layers.md) — rendering-mode details (flat vs VR plumbing)
+- [docs/20260524-world-transitions.md](20260524-world-transitions.md) — load order, user-gesture, enter-prompt
+- [docs/20260521-sync-strategies.md](20260521-sync-strategies.md) — OneDrive sync rules
+- [docs/20260521-vr-locomotion.md](20260521-vr-locomotion.md) — 3-layer VR rig
+- [docs/20260524-principles.md](20260524-principles.md) — cross-cutting rules driving the design

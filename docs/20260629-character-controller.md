@@ -4,7 +4,7 @@
 >
 > This is the **current authority** on RealHome's locomotion / collision /
 > crouch / ground mechanics. It supersedes the collision-and-ground parts of
-> [jump-and-collision.md](jump-and-collision.md); [vr-locomotion.md](vr-locomotion.md)'s
+> [20260521-jump-and-collision.md](20260521-jump-and-collision.md); [20260521-vr-locomotion.md](20260521-vr-locomotion.md)'s
 > 3-layer model still holds and is summarised below. Code lives in
 > [src/player.js](../src/player.js), [src/collision.js](../src/collision.js),
 > tunables in [src/config.js](../src/config.js).

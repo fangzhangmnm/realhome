@@ -35,7 +35,7 @@ import { FAR_LAYER } from "./config.js";
 const COL_RE = /(^|[_\-\s.])(col|collider)$/i;
 // Word-boundary anywhere (legacy form): `skybox`, `_skybox`, `skybox.001`, …
 // NOT `skyboxer`. Semantically this is the "far layer", not just a sky dome —
-// see docs/world-naming-convention.md. `skybox` kept as the token for
+// see docs/20260626-world-naming-convention.md. `skybox` kept as the token for
 // familiarity + backward compatibility.
 const SKYBOX_RE = /(^|[_\-\s.])skybox($|[_\-\s.\d])/i;
 const SPAWN_RE  = /(^|[_\-\s.])spawn($|[_\-\s.\d])/i;

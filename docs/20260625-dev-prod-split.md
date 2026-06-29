@@ -1,7 +1,7 @@
 # dev / prod 分家（RealHome）
 
 > as-of 2026-06-25。家族 mature paradigm（branch + GH Actions + esbuild content-hash
-> bundle）。**为什么这么设计**见 canonical：`../../20260524 WebPaint/docs/dev-prod-split.md`
+> bundle）。**为什么这么设计**见 canonical：`../../20260524 WebPaint/docs/20260625-dev-prod-split.md`
 > —— 本文只记 RealHome 的差异 + 一次性 cutover 步骤。
 
 ## 一句话

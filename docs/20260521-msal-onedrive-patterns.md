@@ -340,7 +340,7 @@ browser shows in the URL bar.
 - [src/onedriveGraph.js](../src/onedriveGraph.js) — listChildren + fetchItem
 - [src/providers.js](../src/providers.js) — `createOneDriveProvider()` wrapping the above
 - [src/config.js](../src/config.js) — `ONEDRIVE_CLIENT_ID`, scopes, redirect builder
-- [docs/onedrive-setup.md](onedrive-setup.md) — Azure App Registration step-by-step
+- [docs/20260521-onedrive-setup.md](20260521-onedrive-setup.md) — Azure App Registration step-by-step
 
 ## Sibling reference
 

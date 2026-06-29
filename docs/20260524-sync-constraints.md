@@ -316,11 +316,11 @@ no in-app edits, flat. The cross-project constraints (1-8) still apply.
   tombstone semantics) — derived from these constraints; will live
   alongside the schema doc.
 - **UI flows for specific operations** — see
-  [docs/user-flows.md](user-flows.md).
+  [docs/20260522-user-flows.md](20260522-user-flows.md).
 - **Per-provider quirks** (Graph API patterns, MSAL traps) — see
-  [docs/msal-onedrive-patterns.md](msal-onedrive-patterns.md).
+  [docs/20260521-msal-onedrive-patterns.md](20260521-msal-onedrive-patterns.md).
 - **Three-pattern taxonomy** (writable-doc / opaque-blob /
-  read-only-asset) — see [docs/sync-strategies.md](sync-strategies.md)
+  read-only-asset) — see [docs/20260521-sync-strategies.md](20260521-sync-strategies.md)
   for the orientation lens.
 
 ## One-sentence summary

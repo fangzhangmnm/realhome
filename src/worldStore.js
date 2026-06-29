@@ -20,7 +20,7 @@
 //     thumbnail           Blob|null    cached sidecar PNG bytes (offline preview)
 //     thumbnailRemoteId   string|null  opaque key for sidecar re-fetch
 //
-//   ── v3 additions (see docs/sync-constraints.md) ──
+//   ── v3 additions (see docs/20260524-sync-constraints.md) ──
 //     pinned              bool     "Top + High protection level" — never auto-evicted.
 //                                  True for user uploads (source=local) and user-cached
 //                                  cloud items (↓ button). False reserved for future
@@ -280,7 +280,7 @@ export async function getUsage() {
 
 // ── LRU eviction for unpinned records ────────────────────────────────────
 //
-// Per docs/sync-constraints.md constraint #2: Top + High protection levels
+// Per docs/20260524-sync-constraints.md constraint #2: Top + High protection levels
 // are `pinned=true` and MUST NOT be auto-evicted. Medium-level records
 // (auto-sync caches, future public-source caches that the user didn't
 // explicitly ↓) are pinned=false and may be evicted when storage
@@ -368,7 +368,7 @@ export async function setSetting(key, value) {
 
 // ── Tombstones (v3 IDB store) ────────────────────────────────────────────
 //
-// Per docs/sync-constraints.md "Empty-list safety net" + "Tombstone
+// Per docs/20260524-sync-constraints.md "Empty-list safety net" + "Tombstone
 // etag-pinning" rules. A tombstone records "user deleted *this etag* of
 // this (source, remoteId)" — a fresh etag on the cloud (artist updated
 // the file) makes the tombstone stale and the world is re-discovered.
