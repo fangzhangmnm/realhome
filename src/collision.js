@@ -76,16 +76,28 @@ export function createCollision(colliderMeshes) {
     return pushed;
   }
 
-  // Push `pos` (a Vector3) out of walls / ceiling. pos is mutated in place.
-  // The capsule covers ONLY [STEP_HEIGHT, headHeight] on Y — the leg zone below
-  // is invisible to the wall capsule, so small thresholds auto-step instead of
-  // blocking. Step Y is handled by groundCheck snapping after this.
-  function resolveCapsule(pos, headHeight) {
+  // Capsule sphere layout for a given character head height. The TOP sphere
+  // sits at headHeight − r (its top edge = headHeight). The BOTTOM (belly)
+  // sphere sits at min(STEP_HEIGHT + r, top) — so when standing it stays at the
+  // fixed step offset, and when the head drops low enough (crouch) it follows
+  // the top down, collapsing toward a single sphere. The belly sphere's LOWER
+  // EDGE (= bottomY − r) is the one unified "step height" / wall-ignore floor:
+  // 0.3 standing, shrinking to 0.15 at full crouch (CROUCH_MIN_HEAD). The leg
+  // zone below it is invisible to the wall capsule (auto-step), and ground-snap
+  // uses the same edge (see player.stepEdge).
+  function capsuleSpheres(headHeight) {
     const r = PLAYER_RADIUS;
-    const bottomY = STEP_HEIGHT + r;
-    const topY = Math.max(headHeight - r, bottomY);
+    const topY = headHeight - r;
+    const bottomY = Math.min(STEP_HEIGHT + r, topY);
     const midY = (bottomY + topY) * 0.5;
-    const degenerate = topY <= bottomY + 0.01;     // very crouched user — 1 sphere
+    const degenerate = topY <= bottomY + 0.01;     // crouched / short — 1 sphere
+    return { r, topY, bottomY, midY, degenerate };
+  }
+
+  // Push `pos` (a Vector3) out of walls / ceiling. pos is mutated in place.
+  // Step Y is handled by groundCheck snapping after this.
+  function resolveCapsule(pos, headHeight) {
+    const { r, topY, bottomY, midY, degenerate } = capsuleSpheres(headHeight);
     for (let i = 0; i < 5; i++) {
       const a = pushSphereOnce(pos, bottomY, r);
       let b = false, c = false;
@@ -165,24 +177,44 @@ export function createCollision(colliderMeshes) {
   }
 
   // Read-only: would the player's HEAD (top capsule sphere) be embedded in a
-  // wall if the rig stood at (x, y, z)? Used to VETO an upward ground-snap onto
-  // a ledge too short for the body — e.g. a window opening lower than head
-  // height: snapping the feet onto the sill would shove the head into the wall
-  // above, so we refuse the snap and let the player fall back instead of
-  // clipping in. Only the top sphere is tested on purpose — lower spheres near
-  // a wall at floor level are the normal "standing beside a wall" case and must
-  // not block legit step-ups. headHeight is the live head height (HMD in VR),
-  // so ducking under a low opening naturally clears it.
+  // wall if the rig stood at (x, y, z) with the given CHARACTER head height?
+  // Used to VETO an upward ground-snap onto a ledge too short for the body —
+  // e.g. a window opening lower than the head: snapping the feet onto the sill
+  // would shove the head into the wall above, so we refuse and let the player
+  // fall back instead of clipping in. Only the top sphere is tested — lower
+  // spheres near a wall at floor level are the normal "standing beside a wall"
+  // case and must not block legit step-ups. Fed the CHARACTER head (charHeadY,
+  // not the live HMD): crouching to a real lower charHeadY lets you mount a
+  // short sill, then standing up is gated by clearHeadHeight + blackout.
   function headBlocked(x, y, z, headHeight, slack = 0.02) {
-    const r = PLAYER_RADIUS;
-    const bottomY = STEP_HEIGHT + r;
-    const topY = Math.max(headHeight - r, bottomY);
+    const { r, topY } = capsuleSpheres(headHeight);
     return spherePenetrates(x, y, z, topY, r, slack);
+  }
+
+  // Read-only: the highest character head height in [lo, hi] whose TOP sphere
+  // stays clear of geometry at (x, y, z). Used to resolve the crouch: the HMD
+  // (intention) wants to rise to `hi`, but an overhead keeps the CHARACTER head
+  // clamped — return how far it can actually stand. Fast path when `hi` is
+  // already clear (the common case); otherwise step down in 5 cm increments to
+  // the first clear height. The character head pinned below the HMD is what
+  // drives the comfort blackout.
+  function clearHeadHeight(x, y, z, lo, hi, slack = 0.02) {
+    const r = PLAYER_RADIUS;
+    if (hi <= lo) return hi;
+    if (!spherePenetrates(x, y, z, hi - r, r, slack)) return hi;
+    const STEP = 0.05;
+    for (let h = hi - STEP; h > lo; h -= STEP) {
+      if (!spherePenetrates(x, y, z, h - r, r, slack)) return h;
+    }
+    return lo;
   }
 
   function dispose() {
     for (const g of geoms) g.dispose();
   }
 
-  return { resolveCapsule, groundCheck, headPenetration, headBlocked, dispose, lowerBound };
+  return {
+    resolveCapsule, groundCheck, headPenetration, headBlocked, clearHeadHeight,
+    dispose, lowerBound,
+  };
 }

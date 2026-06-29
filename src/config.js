@@ -50,11 +50,46 @@ export const PLAYER_RADIUS = 0.3;        // m — capsule radius (used in collis
 export const SEATED_BUMP_M = 0.4;
 
 // Step height: how tall a ledge / threshold / stair the player can climb (or
-// drop off) without jumping. The collision capsule is only built from y =
-// STEP_HEIGHT up — the leg zone is handled by a downward raycast that snaps
-// the rig to floor Y within ±STEP_HEIGHT each frame. Walls below this height
-// are invisible to the capsule, so they auto-step instead of blocking.
+// drop off) without jumping while STANDING. It is the standing value of the
+// "belly-sphere lower edge" — the single unified step concept (see collision.js):
+// the wall capsule is built from this Y up, and the ground-snap tolerance is
+// ±this, so a ledge whose riser is below it auto-steps instead of blocking.
+// When crouched the effective step lowers with the body (emergent, not a 2nd
+// constant) — see collision.capsuleSpheres / stepEdge.
 export const STEP_HEIGHT = 0.3;          // m — Source ~0.4, Unreal ~0.45, ours a bit lower
+
+// ── Crouch (VR) ──────────────────────────────────────────────────────────
+// The CHARACTER's head height is a state decoupled from the live HMD: the HMD
+// is intention input, the character crouches to fit. CROUCH_MIN_HEAD is the
+// lowest the character head can drop to — sized so the crouched single-sphere
+// body clears a 1 m (Minecraft-block) opening: top = CROUCH_MIN_HEAD, belly
+// lower edge = CROUCH_MIN_HEAD − 2·PLAYER_RADIUS = 0.15 m. (Crouch, not crawl —
+// Link crawls, we only squat.)
+export const CROUCH_MIN_HEAD = 0.75;     // m — character head floor when crouched
+
+// HMD-vs-character head gap (the user standing taller than the character can,
+// because the character head is pinned under an overhead) at which the comfort
+// vignette is fully black. Past this the near clip plane clips a little — fine.
+export const BLACKOUT_GAP = 0.25;        // m of head dislocation → full vignette
+
+// Horizontal move is swept by substepping the discrete capsule resolve: split
+// the frame's displacement into chunks of ~SUBSTEP_LEN and resolve each, capped
+// at SUBSTEP_CAP chunks. At walking speed (≤5 m/s, 60 Hz → ≤0.08 m/frame ≪ r)
+// this is 1 chunk; the cap only bites on a huge single-frame teleport, where we
+// accept Mario-style tunnelling rather than spend unbounded queries.
+export const SUBSTEP_LEN = 0.3;          // m per sweep substep (~PLAYER_RADIUS)
+export const SUBSTEP_CAP = 8;            // max substeps per frame
+
+// Fail fast: if CROUCH_MIN_HEAD drops below 2·PLAYER_RADIUS the crouched
+// single-sphere's lower edge (center − r = CROUCH_MIN_HEAD − 2r) goes negative
+// — the body sphere would sink below the floor. Catch the misconfig here rather
+// than silently clip through the ground.
+if (CROUCH_MIN_HEAD < 2 * PLAYER_RADIUS) {
+  throw new Error(
+    `config: CROUCH_MIN_HEAD (${CROUCH_MIN_HEAD}) must be >= 2*PLAYER_RADIUS (${2 * PLAYER_RADIUS}) ` +
+    `or the crouched body sphere dips below the floor`,
+  );
+}
 
 // Mouse-look sensitivity (flat mode)
 export const MOUSE_SENSITIVITY = 0.0022;
