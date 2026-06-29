@@ -37,12 +37,16 @@
           }));
         }
         window.addEventListener("error", function (e) {
+          // GL context failure has its own friendly Chinese retry overlay
+          // (app.js handleGlContextFailure) — don't double up with the raw banner.
+          if (window.__glFatal) return;
           var loc = e.filename
             ? "  " + (e.filename.split("/").pop()) + ":" + e.lineno
             : "";
           show("Error: " + (e.message || e.type) + (loc ? "\n" + loc : ""));
         });
         window.addEventListener("unhandledrejection", function (e) {
+          if (window.__glFatal) return;
           var r = e.reason;
           show("Error: unhandled: " + (r && r.message || r || "unknown"));
         });
@@ -64,6 +68,19 @@
   </head>
   <body>
     <canvas id="canvas"></canvas>
+
+    <!-- WebGL context creation failure (typically out-of-GPU-memory when other
+         apps are running). Shown + driven by app.js handleGlContextFailure:
+         auto-retries with backoff, plus a manual 重试 so the user can free
+         memory and recover without restarting the headset. -->
+    <div id="glErrorOverlay" class="gl-error hidden">
+      <div class="gl-error-card">
+        <h2 class="gl-error-title">无法创建 3D 画面</h2>
+        <p class="gl-error-body">显存可能被其他应用占用，无法初始化 WebGL。</p>
+        <p id="glErrorNote" class="gl-error-note"></p>
+        <button id="glErrorRetry" type="button" class="gl-error-retry">重试</button>
+      </div>
+    </div>
 
     <!-- Worlds picker / pause menu (shown whenever pointer is unlocked) -->
     <div id="startOverlay" class="overlay">
@@ -202,6 +219,6 @@
     <!-- Built by scripts/build.sh → ./dist/realhome-<hash>.mjs (content-hashed).
          three / msal stay external via the importmap above (vendor not bundled).
          build.sh seds this hash; don't hand-edit the filename. -->
-    <script type="module" src="./dist/realhome-4c6624208ec5.mjs"></script>
+    <script type="module" src="./dist/realhome-ddb28466413e.mjs"></script>
   </body>
 </html>

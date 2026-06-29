@@ -64,8 +64,57 @@ const enterPromptName = document.getElementById("enterPromptName");
 const enterPromptButton = document.getElementById("enterPromptButton");
 const enterPromptCancel = document.getElementById("enterPromptCancel");
 
-const { renderer, scene, camera, playerRig, setWorld } = createScene(canvas);
+// WebGL context creation can fail when the system is out of GPU memory (another
+// app / the Quest compositor holding it). three throws "Error creating WebGL
+// context." This is the very top of the app, so an unguarded throw = a dead
+// black screen that SURVIVES reopening (the memory is still held) until a full
+// headset restart — exactly the regression the user hit. Instead: catch it,
+// show a Chinese retry overlay, and auto-reload with capped backoff so a
+// transient memory spike self-heals; the manual 重试 lets the user free memory
+// (close other apps) and recover WITHOUT restarting the headset.
+let _sceneBundle;
+try {
+  _sceneBundle = createScene(canvas);
+  try { sessionStorage.removeItem("glRetryCount"); } catch (_) {}   // success → reset backoff
+} catch (err) {
+  handleGlContextFailure(err);
+  throw err;   // abort the rest of module init — renderer is required everywhere below
+}
+const { renderer, scene, camera, playerRig, setWorld } = _sceneBundle;
 bindWorldLoaderRenderer(renderer);   // KTX2Loader needs renderer to pick ASTC/BC7
+
+// Reveal the GL-failure overlay (index.html #glErrorOverlay), wire its retry
+// button, and auto-reload with capped exponential backoff. Sets window.__glFatal
+// so index.html's generic red error banner stays quiet — the friendly Chinese
+// overlay owns this failure's UI. Function declaration (hoisted) so the boot
+// guard above can call it. See docs/gl-context-resilience.md.
+function handleGlContextFailure(err) {
+  window.__glFatal = true;
+  console.error("WebGL context creation failed:", err);
+  const ov = document.getElementById("glErrorOverlay");
+  if (!ov) { setTimeout(() => location.reload(), 2000); return; }  // old shell w/o overlay → blind retry
+  ov.classList.remove("hidden");
+  document.getElementById("glErrorRetry")?.addEventListener("click", () => {
+    try { sessionStorage.removeItem("glRetryCount"); } catch (_) {}
+    location.reload();
+  });
+
+  // Auto-retry with growing delay, capped — a transient spike self-heals
+  // hands-free, but we never reload-loop forever on a device that genuinely
+  // can't get a context (WebGL disabled, driver dead).
+  const MAX_AUTO = 3;
+  const note = document.getElementById("glErrorNote");
+  let n = 0;
+  try { n = parseInt(sessionStorage.getItem("glRetryCount") || "0", 10) || 0; } catch (_) {}
+  if (n < MAX_AUTO) {
+    try { sessionStorage.setItem("glRetryCount", String(n + 1)); } catch (_) {}
+    const delaySec = Math.round(1.5 * Math.pow(2, n));   // 1.5s → 3s → 6s
+    if (note) note.textContent = `正在自动重试…（约 ${delaySec} 秒后）`;
+    setTimeout(() => location.reload(), delaySec * 1000);
+  } else if (note) {
+    note.textContent = "多次重试仍失败。请关闭其他应用释放显存后点「重试」，或重启头显。";
+  }
+}
 
 // Currently loaded world. id is null when streaming (not in IDB) — match by
 // source+remoteId in that case. `collision` is rebuilt on each installWorld.

@@ -583,6 +583,58 @@ button {
 }
 .enter-prompt-cancel:hover { color: rgba(255, 154, 154, 0.85); }
 
+/* ── WebGL context failure overlay (out-of-GPU-memory retry) ────────────── */
+.gl-error {
+  position: fixed;
+  inset: 0;
+  z-index: 500;          /* above everything — the app can't render behind it */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.95);
+}
+.gl-error.hidden { display: none; }
+.gl-error-card {
+  text-align: center;
+  padding: 32px 40px;
+  border-radius: 14px;
+  background: rgba(20, 22, 26, 0.98);
+  border: 1px solid rgba(232, 214, 168, 0.20);
+  max-width: 420px;
+}
+.gl-error-title {
+  margin: 0 0 12px;
+  font-size: 19px;
+  color: #e8d6a8;
+}
+.gl-error-body {
+  margin: 0 0 8px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.75);
+}
+.gl-error-note {
+  margin: 0 0 24px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: rgba(232, 214, 168, 0.65);
+  min-height: 1.2em;
+}
+.gl-error-retry {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px 32px;
+  background: #e8d6a8;
+  color: #0b0d10;
+  border-radius: 10px;
+  font-size: 16px;
+  font-weight: 600;
+  transition: background 0.12s ease;
+}
+.gl-error-retry:hover { background: #f0deb4; }
+.gl-error-retry:active { transform: scale(0.97); }
+
 /* ── Drag-and-drop overlay (briefly shown on dragenter) ─────────────────── */
 .drop-overlay {
   position: fixed; inset: 0;
