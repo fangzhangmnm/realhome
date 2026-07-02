@@ -1,5 +1,5 @@
 // Player physics (matches the VR-mode spec — kept here so flat & VR share)
-export const WALK_SPEED = 3;               // m/s, hard clip, no acceleration
+export const WALK_SPEED = 5;               // m/s, hard clip, no acceleration
 
 // Dash — fixed top speed while the dash input is held (flat: Shift / gamepad L3;
 // VR: left thumbstick press). FIXED m/s, NOT a multiple of WALK_SPEED, so tuning
@@ -8,7 +8,7 @@ export const WALK_SPEED = 3;               // m/s, hard clip, no acceleration
 // stamina. Pinned at 5 after the render-interpolation fix made high speeds
 // smooth (judder was the only reason 10 was ever on the table). 5 m/s ≈ a brisk
 // jog — fast enough to feel like hustling, slow enough to stay comfortable.
-export const DASH_SPEED = 5;             // m/s while dashing
+export const DASH_SPEED = 8;             // m/s while dashing
 
 // Jump physics — Minecraft-calibrated, variable-jump-height ("Better Jump" pattern):
 //
