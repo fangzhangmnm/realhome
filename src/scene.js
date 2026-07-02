@@ -16,6 +16,9 @@ export function createScene(canvas) {
   // final shaded color. ACES would re-compress highlights/mids and make every
   // baked scene look murky. NoToneMapping keeps texture-as-authored.
   renderer.toneMapping = THREE.NoToneMapping;
+  // Clear color for the empty canvas / pre-world state. Set on the RENDERER,
+  // not via scene.background — see the scene.background note below.
+  renderer.setClearColor(0x000000);
 
   // WebXR. local-floor reference space puts y=0 at the user's actual floor;
   // their head pose is reported relative to that, so the scene's spawn at the
@@ -24,7 +27,15 @@ export function createScene(canvas) {
   renderer.xr.setReferenceSpaceType("local-floor");
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x000000);
+  // KEEP NULL. A solid-Color scene.background makes three.js WebGLBackground
+  // force a full color-clear at the START of every renderer.render() call
+  // (forceClear bypasses renderer.autoClear). The flat-mode skybox uses a
+  // TWO-pass render (app.js renderLayered): pass 1 draws the far layer, pass 2
+  // draws near geometry with autoClear=false. A Color background would re-clear
+  // the canvas to black at the top of pass 2 and erase the pass-1 skybox — so
+  // PC showed no skybox while VR (single pass) did. Clear color lives on the
+  // renderer (setClearColor above) instead; background stays null.
+  scene.background = null;
 
   // Default lights — used by any world whose materials respond to lighting
   // (most baked-lit glbs ignore lights entirely). Cheap; keep them around
