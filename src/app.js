@@ -20,6 +20,7 @@ import {
 } from "./worldStore.js";
 import { providers, getProvider } from "./providers.js";
 import { worldSession } from "./worldSession.js";
+import { createWorldLifecycle } from "./worldLifecycle.js";
 import { isOneDriveConfigured, SEATED_BUMP_M } from "./config.js";
 
 // Detected at boot: is this user agent capable of immersive-vr sessions?
@@ -478,38 +479,39 @@ async function handleDeleteRemote(id) {
 //
 // Either way: world is immediately playable from IDB. The push runs in
 // background via flushPendingUploads.
+// The single owner of the load skeleton (guard, install-then-adopt ordering,
+// error triad, cleanup). The three loaders below supply only their byte source.
+const worldLifecycle = createWorldLifecycle({
+  worldSession, installWorld, renderWorldsList, setStatus, hideLoading, logError,
+});
+
 async function loadFile(file) {
-  if (!worldSession.beginLoad()) return;
-  if (!/\.(glb|gltf)$/i.test(file.name)) { setStatus("not a .glb/.gltf"); worldSession.endLoad(); return; }
-  hudName.textContent = file.name;
-  showLoading("Loading", file.name, -1);
-  try {
+  if (!/\.(glb|gltf)$/i.test(file.name)) { setStatus("not a .glb/.gltf"); return; }
+  await worldLifecycle.run(`upload:${file.name}`, async () => {
+    hudName.textContent = file.name;
+    showLoading("Loading", file.name, -1);
     const finalBlob = file instanceof Blob ? file : new Blob([file], { type: "model/gltf-binary" });
     const result = await loadGlbFromBlob(finalBlob, file.name);
 
-    // Save first (pinned, source=local). pendingUpload flag depends on
-    // whether the user is signed in RIGHT NOW (their drag-time intent).
-    // Don't await account fetch on the critical path — guess via MSAL
-    // already-initialized state; flushPendingUploads will reconcile.
+    // Save first (pinned, source=local). pendingUpload depends on whether the
+    // user is signed in RIGHT NOW (their drag-time intent) — don't await an
+    // account fetch on the critical path; flushPendingUploads reconciles. The
+    // record is COMPLETE before install, so an interrupted load leaves a valid
+    // saved world, never a half-create (interrupt = cancel red-line).
     const signedIn = await isSignedInQuick();
     const record = await addWorld(finalBlob, file.name, {
       source: "local",
       pinned: true,
       pendingUpload: signedIn,
     });
-    worldSession.adopt(record);
-    installWorld(result, file.name);
-    setStatus(signedIn ? "saved, uploading…" : "saved locally");
-    await renderWorldsList();
-    if (signedIn) flushPendingUploads().catch(() => {});
-  } catch (err) {
-    console.error(err);
-    setStatus("save failed");
-    logError(`upload:${file.name}`, `save failed: ${err.message || err}`);
-  } finally {
-    hideLoading();
-    worldSession.endLoad();
-  }
+    return {
+      result,
+      name: file.name,
+      record,
+      status: signedIn ? "saved, uploading…" : "saved locally",
+      onDone: () => { if (signedIn) flushPendingUploads().catch(() => {}); },
+    };
+  }, { failStatus: "save failed" });
 }
 
 // Lightweight signed-in check used by drag-time intent. Doesn't kick off
@@ -655,38 +657,26 @@ async function flushPendingUploads() {
 // synced bytes for the world the user is already standing in (live reload).
 async function switchToWorld(id, { force = false } = {}) {
   if (id === worldSession.id && !force) return;   // same world, no-op (not a busy guard)
-  if (!worldSession.beginLoad()) return;
-  setStatus("loading…");
-  showLoading("Loading", "", -1);
-  try {
+  await worldLifecycle.run(`load:${id}`, async () => {
+    setStatus("loading…");
+    showLoading("Loading", "", -1);
     const record = await getWorld(id);
     if (!record || !record.blob) throw new Error("world not found");
     showLoading("Loading", record.name, -1);
     const result = await loadGlbFromBlob(record.blob, record.name);
     await touchWorld(id);
-    worldSession.adopt(record);     // scene now reflects this record's etag
-    installWorld(result, record.name);
-    setStatus("");
-    await renderWorldsList();
-  } catch (err) {
-    console.error(err);
-    setStatus("load failed");
-    logError(`load:${id}`, `load failed: ${err.message || err}`);
-  } finally {
-    hideLoading();
-    worldSession.endLoad();
-  }
+    return { result, name: record.name, record };   // scene will reflect this record's etag
+  });
 }
 
 // Open an uncached (provider-available) world without persisting. Fresh bytes
 // every time — slower than a cached open, but doesn't fill IDB for one-shot
 // previews. User can tap ↓ separately to persist.
 async function streamOpenWorld(source, remoteId, name) {
-  if (!worldSession.beginLoad()) return;
-  setStatus("loading…");
-  hudName.textContent = name;
-  showLoading("Downloading", name, 0);
-  try {
+  await worldLifecycle.run(`stream:${source}:${remoteId}`, async () => {
+    setStatus("loading…");
+    hudName.textContent = name;
+    showLoading("Downloading", name, 0);
     const p = getProvider(source);
     if (!p) throw new Error(`no provider for ${source}`);
     const result = await p.fetch(remoteId, undefined, (loaded, total) => {
@@ -699,18 +689,13 @@ async function streamOpenWorld(source, remoteId, name) {
     if (!result) throw new Error("source unavailable");
     updateLoading("Loading", name, -1);
     const parsed = await loadGlbFromBlob(result.blob, name);
-    worldSession.adopt(null, { id: null, source, remoteId, loadedEtag: result.etag ?? null });
-    installWorld(parsed, name);
-    setStatus("");
-    await renderWorldsList();
-  } catch (err) {
-    console.error(err);
-    setStatus("load failed");
-    logError(`stream:${source}:${remoteId}`, `${name}: ${err.message || err}`);
-  } finally {
-    hideLoading();
-    worldSession.endLoad();
-  }
+    // streamed = not in IDB → adopt by (source, remoteId), id null, etag from parse.
+    return {
+      result: parsed,
+      name,
+      adoptOverrides: { id: null, source, remoteId, loadedEtag: result.etag ?? null },
+    };
+  });
 }
 
 function installWorld(result, name) {
