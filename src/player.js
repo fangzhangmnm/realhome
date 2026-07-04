@@ -4,6 +4,7 @@ import {
   SNAP_TURN_DEG, PLAYER_HEIGHT, STEP_HEIGHT, DETECT_GROUND_DIST, GROUND_FOLLOW_TAU,
   CROUCH_MIN_HEAD, BLACKOUT_GAP, SUBSTEP_LEN, SUBSTEP_CAP, MAX_ROOMSCALE_STEP,
 } from "./config.js";
+import { rotateXZ } from "./rigMath.js";
 
 // 3-layer model:
 //   Gameplay state  (this module owns these)       → player_pos, player_rot, tracking_origin
@@ -25,6 +26,9 @@ const _forward = new THREE.Vector3();
 const _right = new THREE.Vector3();
 const _UP = new THREE.Vector3(0, 1, 0);
 const _prev = new THREE.Vector3();
+// Scratch for rotateXZ output — reused (single-threaded, read immediately after
+// each write) so the render-interp hot path allocates nothing.
+const _proj = { x: 0, z: 0 };
 
 export function createPlayer(rig, camera, getCollision = () => null, onReset = () => {}) {
   // ── Gameplay state (SSoT) ─────────────────────────────────────────────
@@ -58,10 +62,9 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
   function captureRigState(out) {
     const c = Math.cos(player_rot), s = Math.sin(player_rot);
     // R · tracking_origin   (rotation around +Y by player_rot)
-    const rox = c * tracking_origin.x + s * tracking_origin.y;
-    const roz = -s * tracking_origin.x + c * tracking_origin.y;
-    out.x = player_pos.x - rox;
-    out.z = player_pos.z - roz;
+    rotateXZ(tracking_origin.x, tracking_origin.y, c, s, _proj);
+    out.x = player_pos.x - _proj.x;
+    out.z = player_pos.z - _proj.z;
     out.y = player_pos.y + seated_bump;
     out.rotY = player_rot;
     return out;
@@ -71,6 +74,15 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
     captureRigState(_rigTmp);
     rig.position.set(_rigTmp.x, _rigTmp.y, _rigTmp.z);
     rig.rotation.y = _rigTmp.rotY;
+  }
+
+  // Snap the tracking origin onto the current HMD pose so the next roomscale
+  // tick reads intent_local = 0 (no apparent "user walked"). XZ only — this
+  // idiom never touches yaw (callers that also re-orient add to player_rot
+  // themselves). Used by the tracking-jump guard, snap-turn force-clear,
+  // reset, and system tracking-reset. All four are byte-identical.
+  function reanchorTrackingToHMD() {
+    tracking_origin.set(camera.position.x, camera.position.z);
   }
 
   // ── Render interpolation ──────────────────────────────────────────────
@@ -259,8 +271,8 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
       const hmdX = camera.position.x, hmdZ = camera.position.z;
       const ilx = hmdX - tracking_origin.x;
       const ilz = hmdZ - tracking_origin.y;
-      const iwx =  c * ilx + s * ilz;
-      const iwz = -s * ilx + c * ilz;
+      rotateXZ(ilx, ilz, c, s, _proj);
+      const iwx = _proj.x, iwz = _proj.z;
 
       // Tracking-jump guard: a per-step roomscale delta bigger than any real
       // step is a non-physical HMD pose jump (Quest "Reset View" recenter, a
@@ -268,7 +280,7 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
       // / off ledges → fall through the floor. Absorb it instead: re-anchor
       // tracking_origin to the current HMD and DON'T move the body.
       if (Math.hypot(iwx, iwz) > MAX_ROOMSCALE_STEP) {
-        tracking_origin.set(camera.position.x, camera.position.z);
+        reanchorTrackingToHMD();
       } else {
         _prev.copy(player_pos);
         sweepMove(iwx, iwz);
@@ -303,16 +315,15 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
     const c = Math.cos(player_rot), s = Math.sin(player_rot);
     const ilx = camera.position.x - tracking_origin.x;
     const ilz = camera.position.z - tracking_origin.y;
-    const iwx =  c * ilx + s * ilz;
-    const iwz = -s * ilx + c * ilz;
+    rotateXZ(ilx, ilz, c, s, _proj);
+    const iwx = _proj.x, iwz = _proj.z;
     player_pos.x += iwx;
     player_pos.z += iwz;
     const col = getCollision();
     if (col) col.resolveCapsule(player_pos, charHeadY);
 
     // 2. Force-clear: head re-anchors to player_pos regardless of step 1's outcome
-    tracking_origin.x = camera.position.x;
-    tracking_origin.y = camera.position.z;
+    reanchorTrackingToHMD();
 
     // 3. Rotate. syncRig() at end of updateVR will pick up new R.
     player_rot += deltaAngle;
@@ -333,7 +344,7 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
   function reset() {
     player_pos.copy(spawn_pos);
     player_rot = spawn_rot;
-    tracking_origin.set(camera.position.x, camera.position.z);
+    reanchorTrackingToHMD();
     charHeadY = Math.max(CROUCH_MIN_HEAD, camera.position.y);   // re-anchor to current HMD; no spurious blackout
     velY = 0;
     grounded = true;
@@ -360,7 +371,7 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
   // grounded stay intact — the user pressed "Reset View", not "Respawn".
   function handleTrackingReset(yawShift) {
     if (Number.isFinite(yawShift)) player_rot += yawShift;
-    tracking_origin.set(camera.position.x, camera.position.z);
+    reanchorTrackingToHMD();
     _discontinuity = true;   // reference-frame re-anchor — no interp smear
     syncRig();
   }
