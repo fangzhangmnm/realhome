@@ -21,6 +21,9 @@ import {
 import { providers, getProvider } from "./providers.js";
 import { worldSession } from "./worldSession.js";
 import { createWorldLifecycle } from "./worldLifecycle.js";
+import { createHud } from "./hud.js";
+import { createGalleryView } from "./galleryView.js";
+import { makeIcon, formatBytes } from "./format.js";
 import { isOneDriveConfigured, SEATED_BUMP_M } from "./config.js";
 import { installSwUpdates } from "./swUpdates.js";
 import { guardGlContext } from "./glResilience.js";
@@ -436,6 +439,23 @@ async function handleDeleteRemote(id) {
 //
 // Either way: world is immediately playable from IDB. The push runs in
 // background via flushPendingUploads.
+// HUD surface — status line, progress bar, deduped error log, upstream-update
+// toast. Created here (before worldLifecycle, which injects a few of these) and
+// destructured back into the names the rest of app.js already uses.
+const hud = createHud({
+  hudStatus, progressBar, progressFill, progressLabel,
+  errorLog, worldUpdateToast, worldUpdateText, makeIcon,
+});
+const {
+  setStatus, showProgress, hideProgress,
+  showLoading, updateLoading, hideLoading,
+  logError, clearError, showWorldUpdateToast,
+} = hud;
+
+// Worlds gallery view — owns the world-list DOM rendering + the render-token
+// race guard. Cards carry dataset attrs; app.js's click delegation dispatches.
+const { renderWorldsList } = createGalleryView({ worldsListEl, logError, clearError });
+
 // The single owner of the load skeleton (guard, install-then-adopt ordering,
 // error triad, cleanup). The three loaders below supply only their byte source.
 const worldLifecycle = createWorldLifecycle({
@@ -700,102 +720,6 @@ function installWorld(result, name) {
   if (result.colliders.length) note.push(`collider×${result.colliders.length}`);
   if (result.spawn) note.push("spawn");
   setStatus(note.join(" · "));
-}
-
-function setStatus(s) { hudStatus.textContent = s; }
-
-// Loading indicator. Always DOM-only now: the load-first flow keeps the
-// user in menu state until the world is ready, so the DOM progress bar
-// is always visible. No more 3D loading panel — see docs/20260522-user-flows.md.
-function showLoading(label, detail = "", fraction = -1) {
-  const text = detail ? `${label} — ${detail}` : label;
-  showProgress(text, fraction);
-}
-function updateLoading(label, detail, fraction) {
-  showLoading(label, detail, fraction);
-}
-function hideLoading() {
-  hideProgress();
-}
-
-// Persistent error log shown inline in the menu. setStatus() is ephemeral
-// (overwritten by next op); logError() entries stay until the user dismisses.
-// Key is used to dedup repeated errors (e.g. provider list failing every
-// menu open) — passing the same key just refreshes the timestamp.
-const errorEntries = new Map();   // key → { time, msg, node }
-function logError(key, msg) {
-  console.warn(`[${key}]`, msg);
-  const now = new Date();
-  const timeStr = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  let entry = errorEntries.get(key);
-  if (entry) {
-    entry.node.querySelector(".error-time").textContent = timeStr;
-    entry.node.querySelector(".error-text").textContent = msg;
-    entry.time = now;
-    entry.msg = msg;
-  } else {
-    const node = document.createElement("div");
-    node.className = "error-entry";
-    const t = document.createElement("span");
-    t.className = "error-time";
-    t.textContent = timeStr;
-    const text = document.createElement("span");
-    text.className = "error-text";
-    text.style.flex = "1";
-    text.textContent = msg;
-    const x = document.createElement("button");
-    x.className = "error-dismiss";
-    x.type = "button";
-    x.appendChild(makeIcon("x", 12));
-    x.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      node.remove();
-      errorEntries.delete(key);
-      if (errorEntries.size === 0) errorLog.classList.add("hidden");
-    });
-    node.appendChild(t);
-    node.appendChild(text);
-    node.appendChild(x);
-    errorLog.appendChild(node);
-    errorEntries.set(key, { time: now, msg, node });
-  }
-  errorLog.classList.remove("hidden");
-}
-function clearError(key) {
-  const entry = errorEntries.get(key);
-  if (!entry) return;
-  entry.node.remove();
-  errorEntries.delete(key);
-  if (errorEntries.size === 0) errorLog.classList.add("hidden");
-}
-
-// Progress bar — pass fraction in [0, 1] for determinate (download), or -1
-// for indeterminate (optimize). hideProgress() removes the bar.
-function showProgress(label, fraction) {
-  progressLabel.textContent = label;
-  progressBar.classList.remove("hidden");
-  if (fraction < 0) {
-    progressFill.classList.add("indeterminate");
-    progressFill.style.width = "";
-  } else {
-    progressFill.classList.remove("indeterminate");
-    progressFill.style.width = `${Math.max(0, Math.min(1, fraction)) * 100}%`;
-  }
-}
-function hideProgress() {
-  progressBar.classList.add("hidden");
-  progressFill.classList.remove("indeterminate");
-  progressFill.style.width = "0%";
-}
-
-let worldToastTimer = 0;
-function showWorldUpdateToast(name, isCurrent) {
-  worldUpdateText.textContent = isCurrent
-    ? `"${name}" was updated upstream. Re-enter to see the new version.`
-    : `"${name}" was updated upstream.`;
-  worldUpdateToast.classList.remove("hidden");
-  clearTimeout(worldToastTimer);
-  worldToastTimer = setTimeout(() => worldUpdateToast.classList.add("hidden"), 6000);
 }
 
 // --- Provider-based cache (unifies bundled / onedrive) ---
@@ -1149,312 +1073,6 @@ window.addEventListener("online", () => {
 // The existing handlers in this file already call checkRemoteUpdates;
 // add flushPendingUploads alongside.
 
-// Render token: every renderWorldsList increments this and captures it. Any
-// async append inside the same render checks the token against the current
-// value and bails if a newer render has started — protects against:
-//   (a) two concurrent renderWorldsList() calls racing on innerHTML
-//   (b) a long-running provider.list() append landing in a stale DOM
-let renderToken = 0;
-
-async function renderWorldsList() {
-  const token = ++renderToken;
-  const cached = await listWorlds();                            // sorted by lastVisitedAt
-  if (token !== renderToken) return;
-  const cachedKey = new Set();
-  for (const w of cached) if (w.remoteId) cachedKey.add(`${w.source}:${w.remoteId}`);
-
-  // Step 1: paint cached worlds immediately. Provider availability lookups
-  // happen asynchronously below (one might be a slow Graph round-trip).
-  worldsListEl.innerHTML = "";
-  // Cleanup blob URLs from previous render to avoid memory leak.
-  for (const url of thumbnailUrls) URL.revokeObjectURL(url);
-  thumbnailUrls.length = 0;
-
-  for (const w of cached) appendWorldCard(w, false, token);
-
-  // Step 2: per-provider, fetch the available list and append uncached entries
-  // as each provider resolves. Errors surface in the inline error log, not
-  // console-only. Each provider gets its own try/catch — one provider's
-  // failure doesn't block the others.
-  //
-  // For network-backed providers (OneDrive) we drop a placeholder spinner
-  // card so the user sees something is happening — otherwise the menu just
-  // looks idle for the seconds a Graph round-trip takes. CSS delays the
-  // fade-in 200ms so fast resolves (bundled, cached Graph) don't flash.
-  for (const p of providers) {
-    const needsNetwork = p.source !== "bundled";
-    let placeholder = null;
-    if (needsNetwork) {
-      placeholder = createSourceLoadingCard(p.source);
-      worldsListEl.appendChild(placeholder);
-    }
-    (async () => {
-      let items;
-      try {
-        items = await p.list();
-        clearError(`provider:${p.source}:list`);
-      } catch (err) {
-        placeholder?.remove();
-        logError(`provider:${p.source}:list`, `${p.source}: ${err.message || err}`);
-        return;
-      }
-      placeholder?.remove();
-      if (token !== renderToken) return;
-      for (const it of items) {
-        if (cachedKey.has(`${p.source}:${it.remoteId}`)) continue;
-        // Per constraint #2 + P1.7: hide items the user has tombstoned
-        // (delete-pinned to their etag). A new cloud-side etag will have
-        // invalidated the tombstone in checkRemoteUpdates' GC pass, in
-        // which case this is a no-op.
-        if (await isTombstoned(p.source, it.remoteId, it.etag)) continue;
-        if (token !== renderToken) return;
-        appendWorldCard({
-          kind: "uncached",
-          source: p.source,
-          remoteId: it.remoteId,
-          name: it.name,
-          thumbnailUrl: it.thumbnailUrl || null,
-          thumbnailRemoteId: it.thumbnailRemoteId || null,
-        }, true, token);
-      }
-    })();
-  }
-}
-
-// Track blob URLs created for thumbnails so we can revoke them on re-render.
-// objectURLs leak GPU/main-thread memory until revoked; the cleanup above
-// handles it.
-const thumbnailUrls = [];
-
-// Loading placeholder card. CSS gives it a 200ms fade-in delay so providers
-// that resolve quickly (already-cached Graph response, etc.) don't cause a
-// visual flash. Removed by renderWorldsList when the provider resolves.
-function createSourceLoadingCard(source) {
-  const li = document.createElement("li");
-  li.className = "world-card world-loading-placeholder";
-  li.setAttribute("aria-busy", "true");
-  const spinner = document.createElement("div");
-  spinner.className = "world-loading-spinner";
-  const label = document.createElement("div");
-  label.className = "world-loading-label";
-  label.textContent =
-    source === "onedrive" ? "Loading OneDrive…" :
-    source === "bundled"  ? "Loading bundled…" :
-    `Loading ${source}…`;
-  li.appendChild(spinner);
-  li.appendChild(label);
-  return li;
-}
-
-// ── Inline SVG icons (no emoji — family rule: icons are SVG) ──────────────
-// Feather/Lucide-style stroked 24×24 paths, matching the static icons already
-// inline in index.html (refreshButton). Sibling convention is the same; we
-// keep the set local + tiny rather than vendoring an icon library. Setting
-// innerHTML on an SVGElement parses children into the SVG namespace correctly
-// in all evergreen + Quest browsers.
-const ICON_PATHS = {
-  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
-  upload:   '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>',
-  x:        '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
-  trash:    '<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>',
-};
-function makeIcon(name, size = 16) {
-  const ns = "http://www.w3.org/2000/svg";
-  const svg = document.createElementNS(ns, "svg");
-  svg.setAttribute("viewBox", "0 0 24 24");
-  svg.setAttribute("width", String(size));
-  svg.setAttribute("height", String(size));
-  svg.setAttribute("fill", "none");
-  svg.setAttribute("stroke", "currentColor");
-  svg.setAttribute("stroke-width", "2");
-  svg.setAttribute("stroke-linecap", "round");
-  svg.setAttribute("stroke-linejoin", "round");
-  svg.setAttribute("aria-hidden", "true");
-  svg.innerHTML = ICON_PATHS[name] || "";
-  return svg;
-}
-
-function appendWorldCard(w, uncached, token) {
-  if (token !== renderToken) return;
-  const isCurrent = worldSession.isCurrent({ id: w.id, source: w.source, remoteId: w.remoteId });
-
-  const li = document.createElement("li");
-  li.className =
-    "world-card" + (isCurrent ? " current" : "") + (uncached ? " uncached" : "");
-  if (w.id) li.dataset.id = w.id;
-  else {
-    li.dataset.source = w.source;
-    li.dataset.remoteId = w.remoteId;
-    li.dataset.worldName = w.name;
-  }
-
-  // Thumbnail policy:
-  //   - online: always try fresh from the provider (network URL)
-  //   - offline / 404: fall back to IDB blob if the world is cached
-  //   - neither: gradient placeholder (img element removed)
-  // Bundled and OneDrive use the same render path; only the provider
-  // method's behavior differs (sync URL vs Graph round-trip). The IDB
-  // blob exists iff the world was manually cached via ↓ (cacheWorld
-  // pulls the sidecar at the same time as the glb).
-  const idbBlob = w.thumbnail instanceof Blob ? w.thumbnail : null;
-  const provider = getProvider(w.source);
-  const thumbKey = w.thumbnailRemoteId
-    || (w.source === "bundled" && w.remoteId ? w.remoteId.replace(/\.glb$/i, ".png") : null);
-
-  if (idbBlob || thumbKey) {
-    const img = document.createElement("img");
-    img.className = "world-thumb";
-    img.alt = "";
-    li.appendChild(img);
-
-    const useIdb = () => {
-      if (!idbBlob) { img.remove(); return; }
-      img.onerror = () => img.remove();   // gradient if even the IDB blob fails
-      const url = URL.createObjectURL(idbBlob);
-      thumbnailUrls.push(url);
-      img.src = url;
-    };
-
-    if (thumbKey && provider?.getThumbnailViewUrl) {
-      img.onerror = useIdb;
-      provider.getThumbnailViewUrl(thumbKey).then((url) => {
-        if (token !== renderToken) return;
-        if (url) img.src = url;
-        else useIdb();
-      }).catch(useIdb);
-    } else {
-      useIdb();
-    }
-  }
-
-  // Source + sync-state badges (top-left)
-  const badges = document.createElement("div");
-  badges.className = "world-badges";
-  if (w.source === "bundled" || w.source === "onedrive") {
-    const badge = document.createElement("span");
-    badge.className = "world-badge";
-    badge.textContent = w.source === "bundled" ? "default" : "onedrive";
-    badges.appendChild(badge);
-  }
-  if (w.pendingUpload) {
-    const b = document.createElement("span");
-    b.className = "world-badge world-badge-pending";
-    b.title = "Waiting to upload to OneDrive";
-    b.appendChild(makeIcon("upload", 11));
-    b.appendChild(document.createTextNode("pending"));
-    badges.appendChild(b);
-  } else if (w.uploadDeferred) {
-    const b = document.createElement("span");
-    b.className = "world-badge world-badge-deferred";
-    b.title = "Upload skipped — tap card to re-arm";
-    b.textContent = "local only";
-    badges.appendChild(b);
-  }
-  if (w.remoteFound === false && w.source !== "local") {
-    const b = document.createElement("span");
-    b.className = "world-badge world-badge-ghost";
-    b.title = "Removed from cloud — your local copy is preserved";
-    b.textContent = "missing upstream";
-    badges.appendChild(b);
-  }
-  if (badges.children.length > 0) li.appendChild(badges);
-
-  // Info overlay (bottom)
-  const info = document.createElement("div");
-  info.className = "world-info";
-  const nameSpan = document.createElement("span");
-  nameSpan.className = "world-name";
-  nameSpan.textContent = w.name;
-  info.appendChild(nameSpan);
-
-  const metaSpan = document.createElement("span");
-  metaSpan.className = "world-meta";
-  if (uncached) {
-    metaSpan.textContent = "checking size…";
-    const p = getProvider(w.source);
-    if (p?.getSize) {
-      p.getSize(w.remoteId).then((size) => {
-        if (token !== renderToken) return;
-        metaSpan.textContent = size != null
-          ? `${formatBytes(size)} · tap to stream`
-          : "tap to stream";
-      }).catch(() => {
-        if (token !== renderToken) return;
-        metaSpan.textContent = "tap to stream";
-      });
-    } else {
-      metaSpan.textContent = "tap to stream";
-    }
-  } else {
-    metaSpan.textContent =
-      `${formatBytes(w.byteLength)} · ${formatRelativeTime(w.lastVisitedAt)}`;
-  }
-  info.appendChild(metaSpan);
-  li.appendChild(info);
-
-  // Action buttons (bottom-right). Per source:
-  //   uncached         → ↓ (download to cache)
-  //   cached local     → × (delete permanently — no remote to recover from)
-  //   cached bundled   → × (remove from cache, bundled source can be re-fetched)
-  //   cached onedrive  → × (uncache) + 🗑 (delete from OneDrive too)
-  //   current          → no buttons (can't act on the world you're inside)
-  if (uncached || (w.id && !isCurrent)) {
-    const actions = document.createElement("div");
-    actions.className = "world-actions";
-    if (uncached) {
-      const dl = document.createElement("button");
-      dl.className = "world-action world-cache";
-      dl.type = "button";
-      dl.dataset.source = w.source;
-      dl.dataset.remoteId = w.remoteId;
-      dl.dataset.worldName = w.name;
-      if (w.thumbnailRemoteId) dl.dataset.thumbnailRemoteId = w.thumbnailRemoteId;
-      dl.title = "Download for offline";
-      dl.appendChild(makeIcon("download"));
-      actions.appendChild(dl);
-    } else {
-      const del = document.createElement("button");
-      del.className = "world-action world-delete danger";
-      del.type = "button";
-      del.dataset.id = w.id;
-      del.title = w.source === "local" ? "Delete world" : "Remove from cache";
-      del.appendChild(makeIcon("x"));
-      actions.appendChild(del);
-
-      if (w.source === "onedrive") {
-        const delRemote = document.createElement("button");
-        delRemote.className = "world-action world-delete-remote danger-strong";
-        delRemote.type = "button";
-        delRemote.dataset.id = w.id;
-        delRemote.title = "Delete from OneDrive";
-        delRemote.appendChild(makeIcon("trash"));
-        actions.appendChild(delRemote);
-      }
-    }
-    li.appendChild(actions);
-  }
-
-  worldsListEl.appendChild(li);
-}
-
-function formatBytes(n) {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function formatRelativeTime(ts) {
-  const diff = Date.now() - ts;
-  const s = diff / 1000;
-  if (s < 60) return "just now";
-  const m = s / 60;
-  if (m < 60) return `${Math.floor(m)}m ago`;
-  const h = m / 60;
-  if (h < 24) return `${Math.floor(h)}h ago`;
-  const d = h / 24;
-  if (d < 30) return `${Math.floor(d)}d ago`;
-  return new Date(ts).toLocaleDateString();
-}
 
 // --- Render loop ---
 // ── System tracking-reset handling ────────────────────────────────────────
