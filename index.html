@@ -38,7 +38,7 @@
         }
         window.addEventListener("error", function (e) {
           // GL context failure has its own friendly Chinese retry overlay
-          // (app.js handleGlContextFailure) — don't double up with the raw banner.
+          // (glResilience.js guardGlContext) — don't double up with the raw banner.
           if (window.__glFatal) return;
           var loc = e.filename
             ? "  " + (e.filename.split("/").pop()) + ":" + e.lineno
@@ -70,7 +70,7 @@
     <canvas id="canvas"></canvas>
 
     <!-- WebGL context creation failure (typically out-of-GPU-memory when other
-         apps are running). Shown + driven by app.js handleGlContextFailure:
+         apps are running). Shown + driven by glResilience.js guardGlContext:
          auto-retries with backoff, plus a manual 重试 so the user can free
          memory and recover without restarting the headset. -->
     <div id="glErrorOverlay" class="gl-error hidden">
@@ -219,6 +219,6 @@
     <!-- Built by scripts/build.sh → ./dist/realhome-<hash>.mjs (content-hashed).
          three / msal stay external via the importmap above (vendor not bundled).
          build.sh seds this hash; don't hand-edit the filename. -->
-    <script type="module" src="./dist/realhome-90494af6bc86.mjs"></script>
+    <script type="module" src="./dist/realhome-66fc0ede97a1.mjs"></script>
   </body>
 </html>
