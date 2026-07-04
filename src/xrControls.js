@@ -14,6 +14,8 @@
 //   active — harmless, since the user is standing still to invoke it and dash
 //   only scales joystick glide.
 
+import { makeInputFrame } from "./inputSource.js";
+
 function readStick(gp) {
   if (!gp || !gp.axes) return null;
   const ax = gp.axes;
@@ -102,7 +104,8 @@ export function createXrControls(renderer, /* unused */_player) {
     const respawn = pollHold(respawnLatch, leftGrip && rightGrip, now);
     if (reload || respawn) pulseHaptics(session);
 
-    return { walkX, walkZ, snapStickX, jumpHeld, dash, reload, respawn };
+    // XR adapter of the InputSource seam — sets every field of the contract.
+    return makeInputFrame({ walkX, walkZ, snapStickX, jumpHeld, dash, reload, respawn });
   }
 
   return { readInputs };

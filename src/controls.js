@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { PointerLockControls } from "three/addons/controls/PointerLockControls.js";
+import { makeInputFrame } from "./inputSource.js";
 
 // Flat-mode (desktop) input. Mouse-look via PointerLockControls; movement from
 // WASD + Space + a connected PC gamepad (standard mapping, e.g. Xbox).
@@ -42,7 +43,9 @@ export function createFlatControls(camera, /* unused */_player, domElement) {
   }
 
   // Read gameplay inputs (called once per render frame, then handed to
-  // physics steps). NO writes — just observation.
+  // physics steps). NO writes — just observation. This is the FLAT adapter of
+  // the InputSource seam: it only observes the shared fields; snapStickX/reload/
+  // respawn come from makeInputFrame's defaults (XR-only, inert on this path).
   function readInputs() {
     let walkX = 0, walkZ = 0, jumpHeld = false, dash = keys.shift;
     if (keys.w) walkZ += 1;
@@ -60,7 +63,7 @@ export function createFlatControls(camera, /* unused */_player, domElement) {
       if (pad.buttons[0]?.pressed) jumpHeld = true;
       if (pad.buttons[10]?.pressed) dash = true;   // L3 = dash
     }
-    return { walkX, walkZ, jumpHeld, dash };
+    return makeInputFrame({ walkX, walkZ, jumpHeld, dash });
   }
 
   // Apply gamepad smooth-look to camera.quaternion. Per-render-frame
