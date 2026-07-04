@@ -69,79 +69,46 @@ An object or material whose name contains `skybox` (word-boundary, e.g.
 as `skybox` for familiarity and backward compatibility, but semantically it's the
 **far layer**: a sky dome *and* far parallax scenery (distant mountains, etc.).
 
-### Implementation — separate far-frustum pass (flat mode)
+### Implementation — an ordinary mesh in the single render pass
 
-`worldConvention.applySkyboxTweaks` puts far-layer meshes on **layer 0 +
-`FAR_LAYER`** (`layers.enable`, see the eye-layer trap below), `frustumCulled =
-false`, `fog = false`. Depth is kept **ON** (no `depthTest` hack) so multiple far
-parallax meshes sort against each other. The flat render loop (`app.js` →
-`renderLayered`) then draws two passes that share the view matrix but use
-different projection clip planes, with a depth clear between:
+> as-of 20260704: the old flat-only **two-pass / `FAR_LAYER`** scheme was removed.
+> PC and XR now share **one** render pass, so they render identically. That split
+> was load-bearing only in flat (it silently didn't apply in VR), which both hid a
+> "PC black / VR fine" skybox bug and was a standing source of drift. Rationale +
+> the platform constraints that make a VR two-pass impossible:
+> `docs/reports/20260704-architecture-drift-audit.md`.
 
-| Pass | NEAR | FAR | Notes |
-|---|---|---|---|
-| **Far layer** (`camera.layers.set(FAR_LAYER)`, drawn first) | **1 m** (`SKY_NEAR`) | **100 000 m** (`SKY_FAR`) | only far meshes (main lacks the FAR_LAYER bit); `autoClear` clears color+depth |
-| `renderer.clearDepth()` | | | clear depth only, keep the far-layer color |
-| **Main scene** (`camera.layers.set(0)`, far meshes `visible=false`, drawn over) | **0.05 m** (`NEAR`) | **1000 m** (`FAR`) | far meshes are hidden here so they aren't redrawn (and clipped) in the small frustum; restored after |
+`worldConvention.applySkyboxTweaks` no longer touches layers — the skybox stays on
+the default **layer 0** and renders in the one shared pass (`app.js` render loop:
+`renderer.render(scene, camera)`), depth-sorted against everything else. What the
+tweak still does:
 
-This is a **partition, not a duplication** — each mesh is rendered once. Marginal
-cost: one depth clear + one draw submit + skybox overdraw (already paid before).
-Cheap even on mobile (tilers clear ~free). It is *not* the expensive "render the
-whole scene twice" of reflections/shadows.
+- `frustumCulled = false` — so the dome isn't culled when the camera sits inside it.
+- `fog = false` — so the backdrop isn't tinted.
+- world transform preserved — distance from the camera still varies as the player
+  walks, so **parallax is preserved** (never camera-locked).
 
-Far meshes keep their **world transform** — distance from the camera still varies
-as the player walks, so **parallax is preserved** (they are never camera-locked).
-Because the far pass uses `SKY_FAR = 100 km`, large parallax backdrops are no
-longer clipped (the old single-pass `depthTest = false` did **not** prevent
-clip-space far-plane clipping — that happens before the fragment depth test, so a
-mesh past `FAR` was clipped into a hole).
+**Clipping ceiling (both modes):** everything must fit inside the single frustum
+`NEAR = 0.15 m … FAR = 4000 m` (`config.js`). Backdrops beyond `FAR` clip — in flat
+AND XR alike. XR always had this ceiling (the WebXR session clips at `camera.far`);
+flat now matches it instead of using a wider far-only pass. So: **author skybox
+domes / distant scenery within ~4 km.**
 
-### The WebXR eye-layer trap (why far meshes are on layer 0 + FAR_LAYER)
+**Want vistas beyond `FAR`?** Raise `FAR` and enable
+`new THREE.WebGLRenderer({ logarithmicDepthBuffer: true })` — it redistributes depth
+precision so `NEAR = 0.15 / FAR = 100 km` works in one pass without z-fighting. But
+it writes `gl_FragDepth` per fragment (three.js `logdepthbuf` chunk), which disables
+early-Z and can cost fill-rate on Quest's tiler. It's a deliberate, revertible
+follow-up (tracked as "A2"), **not** the baseline — measure on-device before shipping.
 
-three.js renders XR stereo with an `ArrayCamera` of two eye sub-cameras and uses
-**layer 1 = left eye, layer 2 = right eye** as eye markers. `WebXRManager` splits
-the masks: `cameraL = cameraXR & 0b011`, `cameraR = cameraXR & 0b101`. So **layer
-0 is the only layer both eyes see**; a mesh on layer 1 or 2 renders in one eye
-only, and any layer ≥ 3 is stripped from *both* eyes.
-
-The first cut put the far layer on layer 1 → **the skybox showed in the left eye
-only.** Fix: far meshes carry **both** layer 0 (so both XR eyes render them) and
-`FAR_LAYER = 3` (so flat mode can still isolate them by setting the camera to that
-layer). `applySkyboxTweaks` uses `layers.enable(FAR_LAYER)`, not `.set`.
-
-### XR is a single pass
-
-Because the WebXR runtime owns the projection (`depthNear`/`depthFar` come from
-the session), a wider far frustum is impossible in XR — the two-pass would buy
-nothing. So XR draws **one** normal pass (`camera.layers.set(0)`), and the far
-layer just depth-sorts behind. Consequences:
-
-- Far geometry is bounded by the **session FAR** — keep XR skyboxes within it.
-- No `clearDepth` in XR, so the per-eye scissor question never arises. (`clearDepth`
-  runs only in flat, single-viewport, where it's safe.)
-- Still **needs on-device verification** that both eyes render correctly.
-
-**Why these numbers:**
-
-- Main `0.05 / 1000`: unchanged. 0.05 m lets VR hands/controllers come close;
-  1 km easily covers a building/room.
-- Far `NEAR2 = 1 m`: a compromise. Pushed **small** for backward compatibility —
-  legacy skyboxes may be authored at only a few metres' radius, and `1 m` keeps
-  any dome of radius ≳ 2 m safe. Pushed **large** for depth precision when stacking
-  parallax layers. If you only use large multi-layer parallax and see z-fighting,
-  raise `NEAR2` (no small-skybox concern in that case).
-- Far `FAR2 = 100 km`: holds any horizon dome.
-
-**Hard contract:** the far pass draws first, then `clearDepth`, then the main
-scene draws unconditionally on top. Therefore **all far-layer geometry must be
-genuinely farther than all main-scene geometry** (i.e. beyond `FAR = 1000 m`).
-If you put a far mountain at 800 m and a near wall at 900 m, the wall (drawn
-later) wrongly occludes the closer mountain. Skyboxes satisfy this naturally.
-
-**Why depth is ON now:** the far layer keeps `depthTest`/`depthWrite` so its own
-meshes sort correctly. It can't be occluded by the main scene because the depth
-buffer is cleared between the two passes (far drawn first, then main over a fresh
-depth buffer).
+**Why not keep a separate far pass (the escalation).** A wider far-only pass can't
+work in XR *at all*: three.js masks custom layers out of the per-eye cameras
+(`WebXRManager`: `cameraL = cameraXR & 0b011`, `cameraR = cameraXR & 0b101` — bit 3,
+i.e. any `FAR_LAYER ≥ 3`, is stripped from **both** eyes), and the WebXR session
+owns the projection so the frustum can't be widened mid-frame. A flat-only far pass
+therefore meant two divergent render paths for zero XR benefit. Single-pass is the
+honest unification; the depth-precision job that the far pass used to do is handed
+to `logarithmicDepthBuffer` if and when big vistas are actually needed.
 
 ## Spawn (`spawn`)
 

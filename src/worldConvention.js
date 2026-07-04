@@ -1,5 +1,4 @@
 import * as THREE from "three";
-import { FAR_LAYER } from "./config.js";
 
 // ── World naming convention — the single source of truth ─────────────────────
 // One pass over a loaded glb scene classifies every node by name and applies the
@@ -124,17 +123,14 @@ function readSpawn(marker) {
   return { position, rotation: euler.y };
 }
 
-// Far layer: ENABLE FAR_LAYER on top of layer 0 (not .set, which would drop
-// layer 0). Layer 0 keeps it visible to both XR eye cameras (which only ever see
-// layers {0,1}/{0,2}); FAR_LAYER lets flat mode isolate it into its own large-
-// frustum pass. See app.js renderLayered + config.FAR_LAYER for the WebXR
-// eye-layer trap. Depth is kept ON (no depthTest hack) so multiple far parallax
-// meshes sort against each other. World transforms are preserved — distance from
-// the camera still varies as the player walks, so parallax is intact (never
-// camera-locked). frustumCulled off so the dome isn't culled when the camera sits
-// inside it; fog off so the backdrop isn't tinted.
+// Skybox / distant backdrop tweaks. The skybox is an ORDINARY mesh on layer 0: it
+// renders in the single shared pass (see app.js render loop) and depth-sorts
+// against everything else, so PC and VR look identical — there is no far-layer
+// pass and no per-mode fork. frustumCulled off so the dome isn't culled when the
+// camera sits inside it; fog off so the backdrop isn't tinted. World transform is
+// preserved (parallax intact, never camera-locked). The mesh must fit within
+// config.FAR — backdrops beyond FAR clip in BOTH flat and XR.
 function applySkyboxTweaks(mesh, mats) {
-  mesh.layers.enable(FAR_LAYER);
   mesh.frustumCulled = false;
   for (const m of mats) {
     if (!m) continue;
