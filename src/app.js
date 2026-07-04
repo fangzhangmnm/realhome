@@ -19,6 +19,7 @@ import {
   getUsage, getEvictableBytes, evictUnpinnedLRU,
 } from "./worldStore.js";
 import { providers, getProvider } from "./providers.js";
+import { worldSession } from "./worldSession.js";
 import { isOneDriveConfigured, SEATED_BUMP_M } from "./config.js";
 
 // Detected at boot: is this user agent capable of immersive-vr sessions?
@@ -116,18 +117,12 @@ function handleGlContextFailure(err) {
   }
 }
 
-// Currently loaded world. id is null when streaming (not in IDB) — match by
-// source+remoteId in that case. `collision` is rebuilt on each installWorld.
+// Scene state for the currently loaded world. `collision` is rebuilt on each
+// installWorld. Session IDENTITY (which world / is a load in flight / loadedEtag)
+// lives in worldSession — this object is render-side state only.
 const current = {
-  id: null, source: null, remoteId: null,
   root: null, skyboxes: [], colliders: [], collision: null,
-  // The remoteEtag of the bytes currently PARSED INTO THE SCENE. Distinct
-  // from the IDB record's etag, which a background refresh can bump ahead of
-  // what's rendered. handleEnter / liveReloadCurrentWorld compare the two to
-  // decide whether a re-parse is needed (see docs/20260524-world-transitions.md).
-  loadedEtag: null,
 };
-let loading = false;
 
 
 const player = createPlayer(playerRig, camera, () => current.collision);
@@ -318,7 +313,7 @@ worldsListEl.addEventListener("click", async (e) => {
 const GESTURE_WINDOW_MS = 4000;     // safe margin under Chrome's ~5s
 
 async function handleEnter(item) {
-  if (loading) return;
+  if (worldSession.loading) return;
   hideEnterPrompt();
 
   const id = item.dataset.id;
@@ -327,9 +322,7 @@ async function handleEnter(item) {
   const name = item.dataset.worldName
     || item.querySelector(".world-name")?.textContent
     || id || remoteId || "world";
-  const isCurrent =
-    (id && id === current.id) ||
-    (remoteId && source === current.source && remoteId === current.remoteId);
+  const isCurrent = worldSession.isCurrent({ id, source, remoteId });
 
   const gestureTime = performance.now();
 
@@ -347,7 +340,7 @@ async function handleEnter(item) {
     }
     // Re-parse when this isn't the live world, OR when the scene in memory was
     // built from an older etag than what's now in IDB.
-    const stale = !isCurrent || rec?.remoteEtag !== current.loadedEtag;
+    const stale = !isCurrent || rec?.remoteEtag !== worldSession.loadedEtag;
     if (stale) await switchToWorld(id, { force: true });
   } else {
     // Uncached / streamed — always fetches fresh bytes anyway.
@@ -355,10 +348,7 @@ async function handleEnter(item) {
   }
 
   // Bail if the load failed (current state didn't move to the target).
-  const loaded =
-    (id && current.id === id) ||
-    (remoteId && current.source === source && current.remoteId === remoteId);
-  if (!loaded) return;
+  if (!worldSession.isCurrent({ id, source, remoteId })) return;
 
   if (performance.now() - gestureTime < GESTURE_WINDOW_MS) {
     enterImmersive();
@@ -373,17 +363,17 @@ async function handleEnter(item) {
 // leaving immersive VR (the DOM gallery is invisible inside a Quest session).
 // Reuses the exact same conditional-fetch + force-reparse path as handleEnter.
 async function liveReloadCurrentWorld() {
-  if (loading) return;
-  if (current.id) {
-    const rec = await getWorld(current.id);
+  if (worldSession.loading) return;
+  if (worldSession.id) {
+    const rec = await getWorld(worldSession.id);
     if (rec?.remoteId && rec.source !== "local") {
       // quiet: the DOM progress bar isn't visible in immersive VR anyway.
       await cacheWorld(rec.source, rec.remoteId, rec.name, { quiet: true }).catch(() => {});
     }
-    await switchToWorld(current.id, { force: true });
-  } else if (current.source && current.remoteId) {
+    await switchToWorld(worldSession.id, { force: true });
+  } else if (worldSession.source && worldSession.remoteId) {
     // Streamed (uncached) world — re-stream fresh bytes in place.
-    const { source, remoteId } = current;
+    const { source, remoteId } = worldSession;
     await streamOpenWorld(source, remoteId, hudName.textContent || "world");
   }
 }
@@ -428,7 +418,7 @@ async function handleCache(source, remoteId, name, thumbnailRemoteId = null) {
 // A later cloud-side change to the same item (new etag) invalidates
 // the tombstone automatically (we re-discover the new version).
 async function handleDelete(id) {
-  if (id === current.id) return;  // can't delete the currently-loaded world
+  if (id === worldSession.id) return;  // can't delete the currently-loaded world
   const record = await getWorld(id);
   if (!record) return;
   const msg = record.source === "local"
@@ -449,7 +439,7 @@ async function handleDelete(id) {
 // the time of deletion, but their next background sync will see the file
 // is gone (the local record stays; user can × it manually).
 async function handleDeleteRemote(id) {
-  if (id === current.id) return;
+  if (id === worldSession.id) return;
   const record = await getWorld(id);
   if (!record || record.source !== "onedrive" || !record.remoteId) return;
   const ok = confirm(
@@ -489,9 +479,8 @@ async function handleDeleteRemote(id) {
 // Either way: world is immediately playable from IDB. The push runs in
 // background via flushPendingUploads.
 async function loadFile(file) {
-  if (loading) return;
-  if (!/\.(glb|gltf)$/i.test(file.name)) { setStatus("not a .glb/.gltf"); return; }
-  loading = true;
+  if (!worldSession.beginLoad()) return;
+  if (!/\.(glb|gltf)$/i.test(file.name)) { setStatus("not a .glb/.gltf"); worldSession.endLoad(); return; }
   hudName.textContent = file.name;
   showLoading("Loading", file.name, -1);
   try {
@@ -508,10 +497,7 @@ async function loadFile(file) {
       pinned: true,
       pendingUpload: signedIn,
     });
-    current.id = record.id;
-    current.source = record.source;
-    current.remoteId = record.remoteId;
-    current.loadedEtag = record.remoteEtag || null;
+    worldSession.adopt(record);
     installWorld(result, file.name);
     setStatus(signedIn ? "saved, uploading…" : "saved locally");
     await renderWorldsList();
@@ -522,7 +508,7 @@ async function loadFile(file) {
     logError(`upload:${file.name}`, `save failed: ${err.message || err}`);
   } finally {
     hideLoading();
-    loading = false;
+    worldSession.endLoad();
   }
 }
 
@@ -668,8 +654,8 @@ async function flushPendingUploads() {
 // `force` re-parses even when id === current.id — used to swap in freshly-
 // synced bytes for the world the user is already standing in (live reload).
 async function switchToWorld(id, { force = false } = {}) {
-  if (loading || (id === current.id && !force)) return;
-  loading = true;
+  if (id === worldSession.id && !force) return;   // same world, no-op (not a busy guard)
+  if (!worldSession.beginLoad()) return;
   setStatus("loading…");
   showLoading("Loading", "", -1);
   try {
@@ -678,10 +664,7 @@ async function switchToWorld(id, { force = false } = {}) {
     showLoading("Loading", record.name, -1);
     const result = await loadGlbFromBlob(record.blob, record.name);
     await touchWorld(id);
-    current.id = id;
-    current.source = record.source;
-    current.remoteId = record.remoteId;
-    current.loadedEtag = record.remoteEtag;     // scene now reflects this etag
+    worldSession.adopt(record);     // scene now reflects this record's etag
     installWorld(result, record.name);
     setStatus("");
     await renderWorldsList();
@@ -691,7 +674,7 @@ async function switchToWorld(id, { force = false } = {}) {
     logError(`load:${id}`, `load failed: ${err.message || err}`);
   } finally {
     hideLoading();
-    loading = false;
+    worldSession.endLoad();
   }
 }
 
@@ -699,13 +682,12 @@ async function switchToWorld(id, { force = false } = {}) {
 // every time — slower than a cached open, but doesn't fill IDB for one-shot
 // previews. User can tap ↓ separately to persist.
 async function streamOpenWorld(source, remoteId, name) {
-  if (loading) return;
-  loading = true;
+  if (!worldSession.beginLoad()) return;
   setStatus("loading…");
   hudName.textContent = name;
   showLoading("Downloading", name, 0);
   try {
-    const p = providers.find((p) => p.source === source);
+    const p = getProvider(source);
     if (!p) throw new Error(`no provider for ${source}`);
     const result = await p.fetch(remoteId, undefined, (loaded, total) => {
       const f = total > 0 ? loaded / total : -1;
@@ -717,10 +699,7 @@ async function streamOpenWorld(source, remoteId, name) {
     if (!result) throw new Error("source unavailable");
     updateLoading("Loading", name, -1);
     const parsed = await loadGlbFromBlob(result.blob, name);
-    current.id = null;
-    current.source = source;
-    current.remoteId = remoteId;
-    current.loadedEtag = result.etag || null;
+    worldSession.adopt(null, { id: null, source, remoteId, loadedEtag: result.etag ?? null });
     installWorld(parsed, name);
     setStatus("");
     await renderWorldsList();
@@ -730,7 +709,7 @@ async function streamOpenWorld(source, remoteId, name) {
     logError(`stream:${source}:${remoteId}`, `${name}: ${err.message || err}`);
   } finally {
     hideLoading();
-    loading = false;
+    worldSession.endLoad();
   }
 }
 
@@ -893,7 +872,7 @@ function showWorldUpdateToast(name, isCurrent) {
 // spam the menu's error log — the cached bytes are served regardless.
 async function cacheWorld(source, remoteId, name, opts = {}) {
   const { quiet = false, quietErrors = false, thumbnailRemoteId = null } = opts;
-  const p = providers.find((p) => p.source === source);
+  const p = getProvider(source);
   if (!p) throw new Error(`no provider for source=${source}`);
   const existing = await findByRemoteId(source, remoteId);
   // Manual ↓ supersedes any tombstone for this (source, remoteId).
@@ -952,7 +931,7 @@ async function refreshThumbnailForRec(rec, idOverride = null) {
   if (!rec) return;
   const thumbId = idOverride || rec.thumbnailRemoteId;
   if (!thumbId) return;
-  const p = providers.find((p) => p.source === rec.source);
+  const p = getProvider(rec.source);
   if (!p?.fetchThumbnail) return;
   try {
     const blob = await p.fetchThumbnail(thumbId);
@@ -1010,9 +989,7 @@ async function checkRemoteUpdates() {
         cacheWorld(w.source, w.remoteId, w.name, { quiet: true })
           .then((rec) => {
             if (rec && rec.remoteEtag !== w.remoteEtag) {
-              const isCurrent =
-                (current.id && current.id === rec.id) ||
-                (current.remoteId && current.source === rec.source && current.remoteId === rec.remoteId);
+              const isCurrent = worldSession.isCurrent({ id: rec.id, source: rec.source, remoteId: rec.remoteId });
               showWorldUpdateToast(rec.name, isCurrent);
               renderWorldsList().catch(() => {});
             }
@@ -1357,9 +1334,7 @@ function makeIcon(name, size = 16) {
 
 function appendWorldCard(w, uncached, token) {
   if (token !== renderToken) return;
-  const isCurrent =
-    (w.id && w.id === current.id) ||
-    (w.remoteId && w.source === current.source && w.remoteId === current.remoteId);
+  const isCurrent = worldSession.isCurrent({ id: w.id, source: w.source, remoteId: w.remoteId });
 
   const li = document.createElement("li");
   li.className =
@@ -1380,7 +1355,7 @@ function appendWorldCard(w, uncached, token) {
   // blob exists iff the world was manually cached via ↓ (cacheWorld
   // pulls the sidecar at the same time as the glb).
   const idbBlob = w.thumbnail instanceof Blob ? w.thumbnail : null;
-  const provider = providers.find((p) => p.source === w.source);
+  const provider = getProvider(w.source);
   const thumbKey = w.thumbnailRemoteId
     || (w.source === "bundled" && w.remoteId ? w.remoteId.replace(/\.glb$/i, ".png") : null);
 
@@ -1454,7 +1429,7 @@ function appendWorldCard(w, uncached, token) {
   metaSpan.className = "world-meta";
   if (uncached) {
     metaSpan.textContent = "checking size…";
-    const p = providers.find((p) => p.source === w.source);
+    const p = getProvider(w.source);
     if (p?.getSize) {
       p.getSize(w.remoteId).then((size) => {
         if (token !== renderToken) return;
