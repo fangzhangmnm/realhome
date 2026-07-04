@@ -27,14 +27,13 @@ export function createScene(canvas) {
   renderer.xr.setReferenceSpaceType("local-floor");
 
   const scene = new THREE.Scene();
-  // KEEP NULL. A solid-Color scene.background makes three.js WebGLBackground
-  // force a full color-clear at the START of every renderer.render() call
-  // (forceClear bypasses renderer.autoClear). The flat-mode skybox uses a
-  // TWO-pass render (app.js renderLayered): pass 1 draws the far layer, pass 2
-  // draws near geometry with autoClear=false. A Color background would re-clear
-  // the canvas to black at the top of pass 2 and erase the pass-1 skybox — so
-  // PC showed no skybox while VR (single pass) did. Clear color lives on the
-  // renderer (setClearColor above) instead; background stays null.
+  // The canvas clear color lives on the renderer (setClearColor above), not on
+  // scene.background — so it stays null. Rendering is a single pass with
+  // autoClear=true (app.js render loop), so a Color background would merely be
+  // redundant with the renderer clear; null keeps one source of truth for the
+  // clear. (A Color background was actively harmful back when flat used a
+  // two-pass render — it re-cleared and erased the first pass — but that scheme
+  // is gone; PC and VR now share one pass.)
   scene.background = null;
 
   // Default lights — used by any world whose materials respond to lighting
@@ -45,10 +44,9 @@ export function createScene(canvas) {
   const dir = new THREE.DirectionalLight(0xffeecc, 1.1);
   dir.position.set(5, 10, 4);
   scene.add(dir);
-  // Lights must reach BOTH layers: the main scene (layer 0) and the far layer
-  // (FAR_LAYER), which renders in its own pass (see app.js render loop). A light
-  // only affects an object whose layers intersect the light's. Skyboxes are
-  // usually unlit/baked, but this keeps a lit far mesh from going black.
+  // Lights reach all layers. A light only affects an object whose layers
+  // intersect the light's; everything renders on layer 0 now, but enableAll()
+  // is cheap insurance so a mesh that opts into another layer still gets lit.
   hemi.layers.enableAll();
   dir.layers.enableAll();
 

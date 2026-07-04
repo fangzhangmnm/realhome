@@ -119,26 +119,22 @@ export const MOUSE_SENSITIVITY = 0.0022;
 // Snap-turn angle (gamepad / VR controllers)
 export const SNAP_TURN_DEG = 45;
 
-// Render
-export const FOV_DEG = 75;
-export const NEAR = 0.05;
-export const FAR = 1000;
-
-// Far layer (skybox + distant parallax scenery). In FLAT mode it renders in a
-// SEPARATE pass with a much larger frustum so big parallax backdrops aren't
-// clipped by the main FAR; the main scene then draws over a cleared depth buffer.
-// In XR the runtime owns the projection, so it's a single normal pass (far
-// geometry bounded by the session FAR). See docs/20260626-world-naming-convention.md and
-// app.js renderLayered.
+// Render — ONE single pass for both flat and XR (see app.js render loop).
+// NEAR is deliberately not tiny (a walking human never puts the camera 5cm from a
+// wall, and collision keeps the capsule further out than this), so the near..FAR
+// range keeps good depth precision WITHOUT a logarithmic depth buffer. FAR is
+// large enough that skybox domes / distant parallax scenery fit inside the one
+// frustum — skyboxes are ordinary meshes on layer 0, depth-sorted like everything
+// else, so PC and VR render IDENTICALLY (no far-layer pass, no per-mode fork).
 //
-// FAR_LAYER MUST be ≥ 3: in WebXR three.js reserves layer 1 = left eye, layer 2 =
-// right eye (WebXRManager splits the eye masks &0b011 / &0b101), so a far mesh on
-// layer 1/2 would render in ONE eye only, and any layer ≥ 3 is stripped from both
-// eyes. So far meshes ALSO stay on layer 0 (the only both-eyes layer) and add
-// FAR_LAYER on top — see worldConvention.applySkyboxTweaks.
-export const FAR_LAYER = 3;
-export const SKY_NEAR = 1;               // m
-export const SKY_FAR = 100000;           // m (100 km)
+// Backdrops beyond FAR clip in BOTH modes. XR already had this ceiling (the WebXR
+// session clips at camera.far); flat now matches it. If a future world needs
+// vistas > FAR, the path is: raise FAR + enable WebGLRenderer({logarithmicDepthBuffer:true}).
+// That writes gl_FragDepth per fragment (disables early-Z → watch Quest fill-rate);
+// it is a deliberate, revertible follow-up, not part of this baseline.
+export const FOV_DEG = 75;
+export const NEAR = 0.15;
+export const FAR = 4000;
 
 // --- OneDrive / MSAL config ---
 //
