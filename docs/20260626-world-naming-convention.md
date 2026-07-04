@@ -75,7 +75,8 @@ as `skybox` for familiarity and backward compatibility, but semantically it's th
 > PC and XR now share **one** render pass, so they render identically. That split
 > was load-bearing only in flat (it silently didn't apply in VR), which both hid a
 > "PC black / VR fine" skybox bug and was a standing source of drift. Rationale +
-> the platform constraints that make a VR two-pass impossible:
+> the platform constraints that make a VR two-pass impossible: see **ADR-0001**
+> (`docs/adr/0001-single-pass-render-no-vr-two-pass.md`) and the source analysis in
 > `docs/reports/20260704-architecture-drift-audit.md`.
 
 `worldConvention.applySkyboxTweaks` no longer touches layers — the skybox stays on
