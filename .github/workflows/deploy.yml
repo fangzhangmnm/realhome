@@ -62,8 +62,9 @@ jobs:
           cp -r main-tree/dist   site/dev/dist 2>/dev/null || true
           cp -r prod-tree/worlds site/worlds     2>/dev/null || true
           cp -r main-tree/worlds site/dev/worlds 2>/dev/null || true
-          # /dev/ 不要 SW(改完即见,不走缓存层)；prod SW 的 scope 覆盖 /dev/ 但 fetch 里已 passthrough
-          rm -f site/dev/service-worker.js
+          # /dev/ 保留自己的 SW（上面 for 循环已 cp 到 site/dev/）：dev SW 按 scope 走 network-first
+          # —— 在线「改完即见」不变，离线才回退缓存（修「/dev/ 无 SW → 闪退离线打不开」的坑，
+          # 见 docs/20260704-pwa-offline-dev-sw.md）。别再在这里删 dev SW = 把坑种回来。
 
       - name: Setup Pages
         uses: actions/configure-pages@v4

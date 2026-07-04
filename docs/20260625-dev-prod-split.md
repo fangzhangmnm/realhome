@@ -23,7 +23,7 @@ canonical 的「有用户数据」门槛。
 | vendor | three / three-mesh-bvh / @azure/msal-browser **不进 bundle**——`--external` + index.html 的 `<script type="importmap">` 运行时解析（= WebPaint「vendor 不打包」原则的 ES-module 形态） |
 | build | `scripts/build.sh`（抄 WebPaint，改 ENTRY/名/externals）。esbuild binary `tools/esbuild/`（gitignored，自动 curl） |
 | TS | **今天还没迁**。ENTRY=`./src/app.js`。build.sh 里 tsc 门是占位（装 tsconfig+tsc 即生效）→ 将来逐个 .js→.ts 平滑 |
-| SW | content-hash 自动失效（cache name = `realhome-<bundleHash>`，install 时从 index.html 抠）。**不再手 bump CACHE_VERSION** |
+| SW | content-hash 自动失效（cache name = `realhome-<bundleHash>`，install 时从 index.html 抠）。**不再手 bump CACHE_VERSION**。dev/prod 同一 SW 文件按 scope 分流：prod=cache-first、dev=network-first（2026-07-04 补齐 drift，见 `20260704-pwa-offline-dev-sw.md`） |
 | 世界 | `.glb/.gltf` 在 SW 里 passthrough（store 用 If-None-Match 自己管新鲜度，SW 不许碰）——已保留 |
 
 ## Daily（push dev）
