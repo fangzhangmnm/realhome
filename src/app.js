@@ -23,7 +23,7 @@ import { worldSession } from "./worldSession.js";
 import { createWorldLifecycle } from "./worldLifecycle.js";
 import { createHud } from "./hud.js";
 import { createGalleryView } from "./galleryView.js";
-import { makeIcon, formatBytes } from "./format.js";
+import { makeIcon, formatBytes, show, hide } from "./format.js";
 import { isOneDriveConfigured, SEATED_BUMP_M } from "./config.js";
 import { installSwUpdates } from "./swUpdates.js";
 import { guardGlContext } from "./glResilience.js";
@@ -108,17 +108,15 @@ function enterVR() {
 }
 
 canvas.addEventListener("click", () => {
-  if (xrSupported && !renderer.xr.isPresenting) enterVR();
-  else tryLock();
+  enterImmersive();
 });
 overlay.addEventListener("click", (e) => {
   if (e.target !== overlay) return;
-  if (xrSupported && !renderer.xr.isPresenting) enterVR();
-  else tryLock();
+  enterImmersive();
 });
-flat.controls.addEventListener("lock", () => overlay.classList.add("hidden"));
+flat.controls.addEventListener("lock", () => hide(overlay));
 flat.controls.addEventListener("unlock", () => {
-  overlay.classList.remove("hidden");
+  show(overlay);
   checkRemoteUpdates();           // re-poll sources every time the menu reappears
   flushPendingUploads().catch(() => {});
 });
@@ -141,11 +139,11 @@ document.addEventListener("keydown", (e) => {
 // The menu DOM is hidden during XR; user exits via Meta button to switch.
 renderer.xr.addEventListener("sessionstart", () => {
   document.body.classList.add("xr-active");
-  overlay.classList.add("hidden");
+  hide(overlay);
 });
 renderer.xr.addEventListener("sessionend", () => {
   document.body.classList.remove("xr-active");
-  overlay.classList.remove("hidden");
+  show(overlay);
   checkRemoteUpdates();
   flushPendingUploads().catch(() => {});
 });
@@ -225,13 +223,13 @@ fileInput.addEventListener("change", () => {
 });
 
 // --- Drag-and-drop anywhere on window ---
-window.addEventListener("dragover", (e) => { e.preventDefault(); dropOverlay.classList.remove("hidden"); });
+window.addEventListener("dragover", (e) => { e.preventDefault(); show(dropOverlay); });
 window.addEventListener("dragleave", (e) => {
-  if (!e.relatedTarget) dropOverlay.classList.add("hidden");
+  if (!e.relatedTarget) hide(dropOverlay);
 });
 window.addEventListener("drop", (e) => {
   e.preventDefault();
-  dropOverlay.classList.add("hidden");
+  hide(dropOverlay);
   const f = e.dataTransfer?.files?.[0];
   if (f) loadFile(f);
 });
@@ -348,10 +346,10 @@ function enterImmersive() {
 
 function showEnterPrompt(name) {
   enterPromptName.textContent = name;
-  enterPrompt.classList.remove("hidden");
+  show(enterPrompt);
 }
 function hideEnterPrompt() {
-  enterPrompt.classList.add("hidden");
+  hide(enterPrompt);
 }
 enterPromptButton.addEventListener("click", (e) => {
   e.stopPropagation();
@@ -891,26 +889,26 @@ async function checkRemoteUpdates() {
 // status row.
 async function refreshOneDriveStatus() {
   if (!isOneDriveConfigured()) {
-    onedriveBar.classList.add("hidden");
-    menuToggleBadge.classList.add("hidden");
+    hide(onedriveBar);
+    hide(menuToggleBadge);
     return;
   }
-  onedriveBar.classList.remove("hidden");
+  show(onedriveBar);
   try {
     const { getAccount } = await import("./onedriveAuth.js");
     const account = await getAccount();
     if (account) {
       onedriveStatus.textContent = `Signed in: ${account.username}`;
-      onedriveSignIn.classList.add("hidden");
-      onedriveSignOut.classList.remove("hidden");
-      menuToggleBadge.classList.add("hidden");
+      hide(onedriveSignIn);
+      show(onedriveSignOut);
+      hide(menuToggleBadge);
     } else {
       onedriveStatus.textContent = "Not signed in";
-      onedriveSignIn.classList.remove("hidden");
-      onedriveSignOut.classList.add("hidden");
+      show(onedriveSignIn);
+      hide(onedriveSignOut);
       // Show the orange dot on the hamburger — hints there's a sign-in
       // action available inside, without putting sign-in UI in the main area.
-      menuToggleBadge.classList.remove("hidden");
+      show(menuToggleBadge);
     }
   } catch (err) {
     // MSAL bundle failed to load, init threw, etc. Leave the bar in its
@@ -971,10 +969,10 @@ async function bootstrap() {
   // state. If MSAL later discovers a cached account, refreshOneDriveStatus()
   // swaps the text + button visibility.
   if (isOneDriveConfigured()) {
-    onedriveBar.classList.remove("hidden");
+    show(onedriveBar);
     onedriveStatus.textContent = "Not signed in";
-    onedriveSignIn.classList.remove("hidden");
-    onedriveSignOut.classList.add("hidden");
+    show(onedriveSignIn);
+    hide(onedriveSignOut);
   }
 
   await renderWorldsList();
