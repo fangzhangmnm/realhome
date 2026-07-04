@@ -30,6 +30,12 @@ export function makeIcon(name, size = 16) {
   return svg;
 }
 
+// Visibility toggles — the app hides/reveals elements with a `hidden` class.
+// One helper each so the class name lives in a single place instead of ~20
+// scattered `classList.add/remove("hidden")` calls.
+export function show(el) { el.classList.remove("hidden"); }
+export function hide(el) { el.classList.add("hidden"); }
+
 export function formatBytes(n) {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
