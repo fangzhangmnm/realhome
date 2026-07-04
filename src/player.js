@@ -79,10 +79,38 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
   // Snap the tracking origin onto the current HMD pose so the next roomscale
   // tick reads intent_local = 0 (no apparent "user walked"). XZ only — this
   // idiom never touches yaw (callers that also re-orient add to player_rot
-  // themselves). Used by the tracking-jump guard, snap-turn force-clear,
-  // reset, and system tracking-reset. All four are byte-identical.
+  // themselves). Direct callers: snap-turn force-clear and reset. The two
+  // tracking-DISCONTINUITY sites reach it via onTrackingDiscontinuity() below,
+  // which layers the (optional) re-orient on top of this pure re-anchor.
   function reanchorTrackingToHMD() {
     tracking_origin.set(camera.position.x, camera.position.z);
+  }
+
+  // ── Tracking-discontinuity absorption (shared mechanic, split policy) ──
+  //
+  // A "tracking discontinuity" = a NON-PHYSICAL HMD pose jump: the reference
+  // frame moved under us, not the user's body. RealHome guards against this in
+  // TWO genuinely-distinct places — same absorb mechanic, DIFFERENT policy:
+  //
+  //   Source 1  System "Reset View" (Quest)  — a DELIBERATE, event-notified
+  //             recenter that REPORTS a yaw shift. We keep world heading stable
+  //             by re-orienting player_rot by that yaw. (handleTrackingReset)
+  //   Source 2  Per-step magnitude guard     — an UN-notified single-frame jump
+  //             (tracking glitch, or a recenter we only detect by its physically-
+  //             impossible size). It carries NO recoverable orientation, so we
+  //             absorb it WITHOUT any yaw — inventing a rotation here would inject
+  //             motion sickness. (stepVR roomscale branch)
+  //
+  // Shared here: re-anchor tracking_origin onto the current HMD so the next
+  // roomscale tick reads intent_local = 0 (the jump is absorbed, never walked
+  // into the body/collision), and — ONLY if the source reported one — fold in
+  // `yaw`. Everything ELSE stays at the call site as POLICY, because it depends
+  // on WHERE the call runs: whether to flag a render discontinuity and whether
+  // to write the rig differ between an in-step-loop guard and an out-of-loop
+  // event. This is a naming/locality split with ZERO behavior change.
+  function onTrackingDiscontinuity({ yaw = 0 } = {}) {
+    if (Number.isFinite(yaw)) player_rot += yaw;   // Source 2 passes 0 → no-op
+    reanchorTrackingToHMD();
   }
 
   // ── Render interpolation ──────────────────────────────────────────────
@@ -274,13 +302,16 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
       rotateXZ(ilx, ilz, c, s, _proj);
       const iwx = _proj.x, iwz = _proj.z;
 
-      // Tracking-jump guard: a per-step roomscale delta bigger than any real
-      // step is a non-physical HMD pose jump (Quest "Reset View" recenter, a
-      // tracking glitch). Applying it as locomotion drags the body through walls
-      // / off ledges → fall through the floor. Absorb it instead: re-anchor
-      // tracking_origin to the current HMD and DON'T move the body.
+      // Tracking-discontinuity guard (Source 2, see onTrackingDiscontinuity):
+      // a per-step roomscale delta bigger than any real step is a non-physical
+      // HMD pose jump (unreported recenter, tracking glitch). Applying it as
+      // locomotion drags the body through walls / off ledges → fall through the
+      // floor. Absorb it instead — re-anchor, NO yaw (a magnitude spike carries
+      // no orientation), and DON'T move the body. POLICY: no _discontinuity flag
+      // and no syncRig here — we're inside the fixed-dt step loop, so the render
+      // loop's own captureRigState/writeRigLerp owns the rig write this frame.
       if (Math.hypot(iwx, iwz) > MAX_ROOMSCALE_STEP) {
-        reanchorTrackingToHMD();
+        onTrackingDiscontinuity();
       } else {
         _prev.copy(player_pos);
         sweepMove(iwx, iwz);
@@ -370,8 +401,14 @@ export function createPlayer(rig, camera, getCollision = () => null, onReset = (
   // next roomscale tick reads intent_local = 0. Body position / velocity /
   // grounded stay intact — the user pressed "Reset View", not "Respawn".
   function handleTrackingReset(yawShift) {
-    if (Number.isFinite(yawShift)) player_rot += yawShift;
-    reanchorTrackingToHMD();
+    // Source 1 (see onTrackingDiscontinuity): a DELIBERATE, reported recenter →
+    // absorb the pose jump AND re-orient by the reported yaw to keep world
+    // heading stable.
+    onTrackingDiscontinuity({ yaw: yawShift });
+    // POLICY (differs from the Source-2 guard): this fires OUT of the fixed-dt
+    // step loop (app.js consumes the pending yaw before stepping), so no physics
+    // step will write the rig for us — we flag the render discontinuity so
+    // interpolation doesn't smear the re-anchor, and syncRig ourselves.
     _discontinuity = true;   // reference-frame re-anchor — no interp smear
     syncRig();
   }
