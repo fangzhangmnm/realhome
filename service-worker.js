@@ -1,23 +1,20 @@
-// SW (RealHome) — content-hash bundle auto-invalidation. Copied from the family
-// canonical (WebPaint service-worker.js, v121 rewrite). Cache name =
-// realhome-<bundleHash>, derived at install from the ./dist/realhome-<hash>.mjs
-// in index.html → a new build = new bundle name = new cache; activate clears the
-// old. No manual CACHE_VERSION bump anymore (the content hash IS the version).
+// SW v121 重写：bundle 后整个站只剩 1 个 hash-named bundle，缓存失效**自动**
+// 通过文件名差异解决。manifest hash / import URL rewrite / version.js 合成 这些老花招全删。
 //
-// The SAME file is deployed to / (prod) and /dev/ (dev); each picks its strategy
-// by its own scope — see docs/20260704-pwa-offline-dev-sw.md (ported from WebPaint
-// v365). SCOPE_IS_DEV → network-first (online always fresh = 改完即见, offline falls
-// back to cache so a crash can reopen offline); prod → cache-first + revalidate.
+// 设计：
+//   - install：fetch index.html → 抠出当前 bundle 文件名 → precache 入口 + bundle + statics
+//   - cache name = "realhome-<bundleHash>"。新 bundle = 新 cache name；activate 时清老的。
+//   - fetch：cache-first(prod) / network-first(dev) + 后台 revalidate；ETag 变了通知 page。
 //
-// RealHome-specific rules layered on the canonical:
-//   - .glb / .gltf are PASSTHROUGH (never SW-cached, BOTH scopes): the app's
-//     IndexedDB sync owns world freshness via Graph If-None-Match. SW caching would
-//     fight that — see docs/20260524-sync-constraints.md. NEVER let worlds in.
-//   - prod SW (scope /) skips /dev/ requests — the /dev/-scoped dev SW owns those.
-//     (Was: unconditional /dev/ passthrough + deploy stripped the dev SW = /dev/ had
-//      zero SW → crash-reopen offline failed. Fixed to match WebPaint canonical.)
-//   - three.js ES modules ARE precached — they load at first render via the
-//     importmap and must work offline. msal is lazy (sign-in only) → runtime-cached.
+// 抄自 sibling canonical `../../20260524 WebPaint/service-worker.js`，**与它逐字对齐**——
+// 只差三处硬约束：① realhome- 名（vs webpaint-）② STATIC_PRECACHE 列表 ③ .glb/.gltf passthrough
+// 红线。改 canonical 时把新逻辑照拷回来即可（diff 应仍只剩这三处 + 本头注）。
+//
+// RealHome 硬约束（无法与 WebPaint 逐字同）：
+//   - .glb/.gltf passthrough（两 scope）：世界归 app 的 IndexedDB sync via Graph If-None-Match，
+//     SW 永不缓存世界。见 docs/20260524-sync-constraints.md。NEVER let worlds in。
+//   - STATIC_PRECACHE = three.js / bvh ES 模块（首帧经 importmap 加载，须离线可用）；
+//     msal 惰性（登录才下）→ runtime-cache，不预缓存。
 
 const STATIC_PRECACHE = [
   "./",
@@ -38,8 +35,13 @@ const STATIC_PRECACHE = [
   // msal NOT precached: lazy-loaded only on OneDrive sign-in → runtime-cached.
 ];
 
-let CACHE_NAME = "realhome-boot";   // install replaces with realhome-<bundleHash>
-const SCOPE_IS_DEV = self.location.pathname.includes("/dev/");   // this SW's own URL
+let CACHE_NAME = "realhome-boot";   // install 时会被替换为 realhome-<bundleHash>
+
+// 同一个 SW 文件部署到 /(prod) 和 /dev/ 两处；按**自己的作用域**选策略（owner: docs + src/app.js SW 注册块）：
+//   - prod(scope=/)      → cache-first：秒开 + 离线稳，更新靠 asset-updated toast。
+//   - dev(scope 含 /dev/) → network-first：在线永远先抓网（「改完即见」/强制更新不变），离线才回退缓存
+//     （崩溃后能离线重开——修「/dev/ 按设计无 SW → 闪退离线打不开」的坑，见 docs/20260704-pwa-offline-dev-sw.md）。
+const SCOPE_IS_DEV = self.location.pathname.includes("/dev/");
 
 async function getCurrentBundleUrl() {
   const res = await fetch("./index.html", { cache: "no-store" });
@@ -82,55 +84,51 @@ let updateAnnounced = false;
 async function notifyUpdate(url) {
   if (updateAnnounced) return;
   updateAnnounced = true;
-  const list = await self.clients.matchAll({ includeUncontrolled: true });
-  for (const c of list) c.postMessage({ type: "asset-updated", url });
+  const clients = await self.clients.matchAll({ includeUncontrolled: true });
+  for (const c of clients) c.postMessage({ type: "asset-updated", url });
 }
 
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
   const url = new URL(req.url);
-  if (url.origin !== self.location.origin) return;          // Graph / MS login → passthrough
-  // .glb/.gltf passthrough (BOTH scopes) — worlds are owned by the app's IndexedDB
-  // sync, not the SW cache. Letting them in would double-cache + fight If-None-Match.
+  if (url.origin !== self.location.origin) return;
+  // .glb/.gltf passthrough（两 scope）：世界归 app 的 IDB sync via If-None-Match，SW 永不缓存。见 docs/20260524-sync-constraints.md。
   if (/\.(glb|gltf)$/i.test(url.pathname)) return;
-  // prod SW (scope /) doesn't touch /dev/ — the /dev/-scoped dev SW owns those.
-  // dev SW's scope is already limited to /dev/, so only prod needs this skip.
+  // prod 根 SW(scope=/)不碰 /dev/——留给 /dev/ 作用域的 dev SW 自己处理（dev SW 的 scope 已限在 /dev/，故只 prod 需此跳）。
   if (!SCOPE_IS_DEV && url.pathname.includes("/dev/")) return;
   event.respondWith(SCOPE_IS_DEV ? networkFirst(req) : cacheFirst(req));
 });
 
-// prod: cache-first + background revalidate (ETag/length change → toast the page).
+// prod：cache-first + 后台 revalidate（ETag/长度变 → 通知 page 弹更新 toast）。
 async function cacheFirst(req) {
   const cache = await caches.open(CACHE_NAME);
   const cached = await cache.match(req, { ignoreSearch: true });
-  const network = fetch(req).then((response) => {
-    if (response && response.ok) {
+  const networkPromise = fetch(req).then((resp) => {
+    if (resp && resp.ok) {
       if (cached) {
-        const cE = cached.headers.get("etag"), fE = response.headers.get("etag");
-        const cL = cached.headers.get("content-length"), fL = response.headers.get("content-length");
+        const cE = cached.headers.get("etag"), fE = resp.headers.get("etag");
+        const cL = cached.headers.get("content-length"), fL = resp.headers.get("content-length");
         const changed = (cE && fE && cE !== fE) || (!cE && cL && fL && cL !== fL);
         if (changed) notifyUpdate(req.url).catch(() => {});
       }
-      // hash-named bundle can't change content; other files may update — put once.
-      cache.put(req, response.clone()).catch(() => {});
+      cache.put(req, resp.clone()).catch(() => {});   // hash-named bundle 内容不变；其它文件更新则刷一次
     }
-    return response;
+    return resp;
   }).catch(() => null);
-  if (cached) { network.catch(() => {}); return cached; }
-  const response = await network;
-  if (response) return response;
+  if (cached) { networkPromise.catch(() => {}); return cached; }
+  const resp = await networkPromise;
+  if (resp) return resp;
   return navFallback(req, cache);
 }
 
-// dev: network-first — online always fresh (改完即见 / 强制更新 unchanged), offline
-// falls back to cache (so a crash-killed PWA can reopen offline).
+// dev：network-first——在线永远拿最新（「改完即见」/强制更新不变），离线才回退缓存（崩溃后能离线重开）。
 async function networkFirst(req) {
   const cache = await caches.open(CACHE_NAME);
   try {
-    const response = await fetch(req);
-    if (response && response.ok) cache.put(req, response.clone()).catch(() => {});   // seed cache for offline
-    return response;
+    const resp = await fetch(req);
+    if (resp && resp.ok) cache.put(req, resp.clone()).catch(() => {});   // 顺手刷缓存，供下次离线回退
+    return resp;
   } catch {
     const cached = await cache.match(req, { ignoreSearch: true });
     if (cached) return cached;
@@ -138,7 +136,7 @@ async function networkFirst(req) {
   }
 }
 
-// navigation offline + not cached → serve the cached index.html (PWA shell); else 503.
+// 导航请求离线且未命中 → 回退缓存的 index.html（PWA 壳）；否则 503。
 async function navFallback(req, cache) {
   if (req.mode === "navigate") {
     const fallback = await cache.match("./index.html");
