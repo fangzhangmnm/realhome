@@ -583,6 +583,52 @@ button {
 }
 .enter-prompt-cancel:hover { color: rgba(255, 154, 154, 0.85); }
 
+/* ── Pause overlay (flat mode) ─────────────────────────────────────────────
+   Translucent on purpose: the world stays visible behind it so it reads as
+   "paused, still standing here" rather than "left to the menu". Below the
+   enter-prompt (200) and gl-error (500), above HUD + toasts. */
+.pause-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 190;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  cursor: pointer;            /* whole backdrop resumes on click */
+}
+.pause-overlay.hidden { display: none; }
+.pause-card {
+  text-align: center;
+  padding: 28px 40px;
+  border-radius: 14px;
+  background: rgba(20, 22, 26, 0.96);
+  border: 1px solid rgba(232, 214, 168, 0.20);
+  cursor: default;
+}
+.pause-title {
+  margin: 0 0 20px;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.22em;
+  color: rgba(232, 214, 168, 0.75);
+}
+.pause-hint {
+  margin: 18px 0 0;
+  font-size: 12px;
+  color: rgba(232, 214, 168, 0.45);
+}
+.pause-hint kbd {
+  background: rgba(232, 214, 168, 0.08);
+  border: 1px solid rgba(232, 214, 168, 0.15);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.92em;
+}
+
 /* ── WebGL context failure overlay (out-of-GPU-memory retry) ────────────── */
 .gl-error {
   position: fixed;

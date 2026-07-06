@@ -114,7 +114,7 @@
         <ul id="worldsList" class="worlds-grid" role="list"></ul>
 
         <p class="hints">
-          <kbd>WASD</kbd> move &nbsp;·&nbsp; <kbd>Shift</kbd> dash &nbsp;·&nbsp; <kbd>Mouse</kbd> look &nbsp;·&nbsp; <kbd>Space</kbd> jump &nbsp;·&nbsp; <kbd>Esc</kbd> menu
+          <kbd>WASD</kbd> move &nbsp;·&nbsp; <kbd>Shift</kbd> dash &nbsp;·&nbsp; <kbd>Mouse</kbd> look &nbsp;·&nbsp; <kbd>Space</kbd> jump &nbsp;·&nbsp; <kbd>Esc</kbd> 暂停/继续
         </p>
       </main>
     </div>
@@ -193,6 +193,26 @@
       </div>
     </div>
 
+    <!-- Pause overlay (flat / PC). Shown when pointer lock drops — usually
+         because the window lost focus (alt-tab, a notification) or the user
+         hit Esc — WITHOUT unloading the world. The current world keeps
+         rendering behind a translucent scrim; resuming re-locks in place so
+         the player keeps their exact position. Going to the world list (to
+         switch worlds) is a separate, explicit button. See docs. -->
+    <div id="pauseOverlay" class="pause-overlay hidden">
+      <div class="pause-card">
+        <p class="pause-title">已暂停</p>
+        <button id="pauseResumeButton" type="button" class="enter-prompt-button">
+          <span class="enter-prompt-button-glyph">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="6 4 20 12 6 20 6 4"/></svg>
+          </span>
+          <span>继续</span>
+        </button>
+        <button id="pauseGalleryButton" type="button" class="enter-prompt-cancel">世界列表</button>
+        <p class="pause-hint">点击任意处 / 按 <kbd>Esc</kbd> 继续</p>
+      </div>
+    </div>
+
     <!-- Progress bar (download + optimize during cache) -->
     <div id="progressBar" class="progress-bar hidden">
       <div id="progressLabel" class="progress-label"></div>
@@ -219,6 +239,6 @@
     <!-- Built by scripts/build.sh → ./dist/realhome-<hash>.mjs (content-hashed).
          three / msal stay external via the importmap above (vendor not bundled).
          build.sh seds this hash; don't hand-edit the filename. -->
-    <script type="module" src="./dist/realhome-bfc3241ea0cc.mjs"></script>
+    <script type="module" src="./dist/realhome-e8670b4aa39a.mjs"></script>
   </body>
 </html>

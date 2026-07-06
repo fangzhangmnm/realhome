@@ -70,6 +70,8 @@ const enterPrompt = document.getElementById("enterPrompt");
 const enterPromptName = document.getElementById("enterPromptName");
 const enterPromptButton = document.getElementById("enterPromptButton");
 const enterPromptCancel = document.getElementById("enterPromptCancel");
+const pauseOverlay = document.getElementById("pauseOverlay");
+const pauseGalleryButton = document.getElementById("pauseGalleryButton");
 
 // WebGL context creation can fail when the system is out of GPU memory (another
 // app / the Quest compositor holding it). guardGlContext catches that, shows the
@@ -94,9 +96,23 @@ const vignette = createVignette(camera);
 // --- Pointer lock (flat desktop) / VR session (Quest) ---
 function tryLock() {
   if (renderer.xr.isPresenting) return;
-  if (!flat.isLocked()) {
-    try { flat.controls.lock(); } catch (_) { /* not supported on this browser */ }
-  }
+  if (flat.isLocked()) return;
+  // requestPointerLock rejects with "the root document is not valid for pointer
+  // lock" when the document isn't focused — the usual case right after alt-tab,
+  // before our window has actually taken focus. Attempting anyway just spams the
+  // console with an unhandled rejection and still fails, so skip it: the pause /
+  // menu overlay stays up and the user's next click (which focuses the page)
+  // retries via the overlay's click handler.
+  if (document.hasFocus && !document.hasFocus()) return;
+  // Call requestPointerLock directly (not controls.lock()) so we can OWN the
+  // returned promise. controls.lock() drops it on the floor, turning every
+  // transient failure (focus race, Chrome's ~1.25s re-lock cooldown) into an
+  // unhandled rejection. The pointerlockchange event still drives the lock/
+  // unlock listeners regardless of who calls requestPointerLock.
+  try {
+    const p = canvas.requestPointerLock?.();
+    if (p && typeof p.catch === "function") p.catch(() => {});
+  } catch (_) { /* not supported on this browser */ }
 }
 // Fire requestSession synchronously inside the user gesture. World swap (if any)
 // happens in parallel; VR enters showing the current scene, new scene cuts in
@@ -114,20 +130,49 @@ overlay.addEventListener("click", (e) => {
   if (e.target !== overlay) return;
   enterImmersive();
 });
-flat.controls.addEventListener("lock", () => hide(overlay));
+// True once a world is parsed into the scene (identity is set). Distinguishes
+// "pointer lock dropped mid-session" (→ pause, keep the world) from "no world
+// yet / booting" (→ world list).
+const hasWorld = () => !!(worldSession.id || worldSession.remoteId);
+
+flat.controls.addEventListener("lock", () => { hide(overlay); hide(pauseOverlay); });
 flat.controls.addEventListener("unlock", () => {
-  show(overlay);
+  // Pointer lock drops for two very different reasons: the window merely lost
+  // focus (alt-tab, a notification) or the user hit Esc — vs. the user actually
+  // wanting to switch worlds. Only the world-list button is the latter, so
+  // DEFAULT to PAUSE whenever a world is loaded: the world stays rendered
+  // behind a translucent scrim and resuming re-locks in place (position kept).
+  // The world list is reached explicitly (pause → 世界列表) or at boot.
+  if (hasWorld() && !renderer.xr.isPresenting) {
+    show(pauseOverlay);
+  } else {
+    show(overlay);
+  }
   checkRemoteUpdates();           // re-poll sources every time the menu reappears
   flushPendingUploads().catch(() => {});
 });
-// Esc closes the menu too (just like clicking outside): when the overlay is
-// visible and we're not in XR, hitting Esc re-locks pointer + hides the menu.
-// The browser-native Esc-unlocks-pointer behaviour during gameplay is preserved.
+// Pause overlay: clicking anywhere on it — or Esc — resumes in place. Only the
+// "世界列表" button drops to the full world list (to switch worlds). The resume
+// button lives inside the overlay, so its click bubbles up to this handler.
+pauseOverlay.addEventListener("click", () => tryLock());
+pauseGalleryButton.addEventListener("click", (e) => {
+  e.stopPropagation();            // don't let the backdrop's resume fire
+  hide(pauseOverlay);
+  show(overlay);
+  checkRemoteUpdates();
+  flushPendingUploads().catch(() => {});
+});
+// Esc re-locks (resume) whenever the pause overlay OR the world list is up and
+// we're not in XR. The browser-native Esc-unlocks-pointer behaviour during
+// gameplay is preserved (that first Esc is swallowed by the browser to exit
+// lock; a second Esc reaches us here to resume).
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (renderer.xr.isPresenting) return;
   if (flat.isLocked()) return;
-  if (overlay.classList.contains("hidden")) return;
+  const paused = !pauseOverlay.classList.contains("hidden");
+  const inMenu = !overlay.classList.contains("hidden");
+  if (!paused && !inMenu) return;
   tryLock();
 });
 // Track whether the current XR session granted dom-overlay. When granted,
