@@ -1,7 +1,7 @@
 # PWA 离线 / dev SW 策略（RealHome）
 
 > as-of 2026-07-04。owner：`service-worker.js`（worker 侧）+ `src/app.js` SW 注册块（app 侧）。
-> **为什么这么设计**见 canonical：`../../20260524 WebPaint/docs/20260630-pwa-offline-dev-sw.md`。
+> **为什么这么设计**见 canonical：`../../20260524 WebPaint/ai-docs/20260630-pwa-offline-dev-sw.md`。
 > 本文只记 RealHome 的落地 + 差异。how 类，会腐烂——动 SW/部署前以代码现状为准。
 
 ## 背景：清理 dev/prod split 的一处 drift（2026-07-04）
