@@ -18,3 +18,5 @@ dist/realhome-tmp.mjs.map
 worlds/*.glb
 !worlds/RealHomeDefaultWorld.glb
 worlds/index.json
+journal/
+.claude/
