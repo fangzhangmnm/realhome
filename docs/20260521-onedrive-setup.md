@@ -16,11 +16,17 @@ matched, so you can't reuse mine.
 
 2. **Name:** anything, e.g. `RealHome`.
 
-3. **Supported account types:**
-   `Personal Microsoft accounts only`
-   *or*
+3. **Supported account types:** pick
    `Accounts in any organizational directory + personal Microsoft accounts`
-   The latter is what RealHome uses ("All Microsoft account users").
+   ("All Microsoft account users" — what RealHome uses).
+
+   > ⚠️ Do NOT pick `Personal Microsoft accounts only`. Tested 2026-08-10
+   > (canary experiment): token redemption fails on BOTH `/common` and
+   > `/consumers` authorities with `invalid_request: userAudience Consumer`.
+   > And editing the audience to "All" afterwards does NOT fix it — the
+   > token endpoint keeps serving the old audience value (portal UI and
+   > the issuing path are separate subsystems). The only fix is to
+   > register a fresh app with "All" from the start.
 
 4. **Redirect URI:** leave blank for now — we'll add SPA URIs in the next
    step. (The dropdown only offers Web here, which is the wrong platform.)
@@ -105,6 +111,9 @@ escape via path traversal.
 | `AADSTS50011: The reply URL specified in the request does not match` | Redirect URI mismatch. The URL in your browser address bar must EXACTLY match one of the registered SPA redirect URIs, including the trailing slash. |
 | Sign-in works but Graph calls return 401 | Permission scopes mismatch. Verify both `Files.ReadWrite.AppFolder` AND `offline_access` are added in API permissions, and re-consent (sign out + sign in again) so the new scopes apply. |
 | `interaction-required: redirect initiated` (then page reloads) | Normal. The refresh token expired (rare — only happens after 90 days of inactivity, or if user revoked consent). |
+| `invalid_request: ... userAudience Consumer` at token redemption | App was registered as `Personal Microsoft accounts only` — broken on both `/common` and `/consumers`. Editing the audience to "All" in place does NOT take (endpoint keeps the old value); register a fresh app. (Canary experiment, 2026-08-10.) |
+| Opaque `server_error` at token redemption, for NEW consents only (existing grants keep working) | Not a form-field error. Suspected tenant standing problem (e.g. the tenant's Azure subscription was deleted → new service-principal provisioning fails) or same-day MSA anti-abuse throttling. Retry another day to tell them apart; if it persists, re-attach a pay-as-you-go subscription or register in a fresh tenant. (Canary experiment, 2026-08-10, unresolved.) |
+| Sign-in seems to silently do nothing after redirect | The store auth layer swallows `handleRedirectPromise` failures as a `console.warn` — open devtools console; the real error is there. |
 
 ## Revoking access (user-side)
 
