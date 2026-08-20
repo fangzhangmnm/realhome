@@ -1,5 +1,14 @@
 # OneDrive setup (Azure App Registration)
 
+> ⚠️ **As of ~Aug 2026 these steps alone are no longer sufficient.** Microsoft
+> now blocks end users (personal accounts included) from consenting to
+> unverified-publisher multitenant apps: sign-in dies after Accept with a bare
+> `#error=server_error`. Existing grants keep working; only NEW consents fail.
+> You additionally need publisher verification (CPP/MPN ID + DNS-verified
+> custom publisher domain + registration owned by a work account — MSA-created
+> registrations can never be verified). Case file:
+> PWAProjects root `ai-docs/20260820-msa-consent-publisher-verification-block.md`.
+
 To enable OneDrive sync in RealHome, register a Microsoft Entra (Azure AD)
 application. This is free, takes ~5 minutes, and uses a personal Microsoft
 account.
@@ -112,7 +121,7 @@ escape via path traversal.
 | Sign-in works but Graph calls return 401 | Permission scopes mismatch. Verify both `Files.ReadWrite.AppFolder` AND `offline_access` are added in API permissions, and re-consent (sign out + sign in again) so the new scopes apply. |
 | `interaction-required: redirect initiated` (then page reloads) | Normal. The refresh token expired (rare — only happens after 90 days of inactivity, or if user revoked consent). |
 | `invalid_request: ... userAudience Consumer` at token redemption | App was registered as `Personal Microsoft accounts only` — broken on both `/common` and `/consumers`. Editing the audience to "All" in place does NOT take (endpoint keeps the old value); register a fresh app. (Canary experiment, 2026-08-10.) |
-| Opaque `server_error` at token redemption, for NEW consents only (existing grants keep working) | Not a form-field error. Suspected tenant standing problem (e.g. the tenant's Azure subscription was deleted → new service-principal provisioning fails) or same-day MSA anti-abuse throttling. Retry another day to tell them apart; if it persists, re-attach a pay-as-you-go subscription or register in a fresh tenant. (Canary experiment, 2026-08-10, unresolved.) |
+| Consent page renders fine, user clicks Accept, then bounced back with a bare `#error=server_error` (no description) — NEW consents only, existing grants keep working | Microsoft blocks end-user consent to unverified-publisher multitenant apps (policy covers apps registered after 2020-11-08 requesting more than basic sign-in). Enforcement reached personal (MSA) accounts around Aug 2026, with this shoddy error surface. Not fixable by re-registering, changing accounts, networks, or subscriptions — publisher verification (CPP/MPN ID + custom publisher domain + work-account-owned registration) is the only real fix. Full case file: PWAProjects root `ai-docs/20260820-msa-consent-publisher-verification-block.md`. (Diagnosed 2026-08-20; supersedes the 2026-08-10 "tenant standing" suspicion.) |
 | Sign-in seems to silently do nothing after redirect | The store auth layer swallows `handleRedirectPromise` failures as a `console.warn` — open devtools console; the real error is there. |
 
 ## Revoking access (user-side)
