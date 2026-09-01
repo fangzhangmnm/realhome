@@ -74,9 +74,9 @@ export function getPCA() {
     const pca = new PublicClientApplication({
       auth: {
         clientId: ONEDRIVE_CLIENT_ID,
-        // /common = personal + work/school accounts. Matches the "All Microsoft
-        // account users" supportedAccountTypes in Azure.
-        authority: "https://login.microsoftonline.com/common",
+        // /consumers = personal Microsoft accounts only (family rule 2026-09-01: personal-account-only;
+        // the Azure registration's supportedAccountTypes must be flipped in lockstep — see family CLAUDE.md #7).
+        authority: "https://login.microsoftonline.com/consumers",
         redirectUri: onedriveRedirectUri(),
         postLogoutRedirectUri: onedriveRedirectUri(),
         navigateToLoginRequestUrl: true,
