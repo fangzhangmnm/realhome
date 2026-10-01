@@ -17,6 +17,8 @@
 // the version watermark.
 
 const isLocal = ["localhost", "127.0.0.1", "::1", ""].includes(location.hostname);
+// Name prefix of this app's shell caches (= service-worker.js `realhome-<hash>` / `realhome-boot`). Force-reset may only touch this prefix.
+const SHELL_CACHE_PREFIX = "realhome-";
 
 /**
  * Wire up service-worker registration + PWA update detection.
@@ -73,20 +75,26 @@ export function installSwUpdates({ updateToast, updateReload, forceUpdateButton,
   });
 
   // Force update (清缓存重启) — the canonical "PWA stuck on an old version" escape
-  // hatch. Unregister all SWs + wipe Cache Storage + reload. Worlds live in
-  // IndexedDB and are NOT touched. Guarded on being online: clearing the cache
-  // while offline would leave nothing to reload from. See docs/20260625-pwa-updates.md.
+  // hatch. Unregister the SW that controls this page + delete this app's own
+  // caches (`realhome-*`) + reload. Worlds live in IndexedDB and are NOT touched.
+  // Guarded on being online: clearing the cache while offline would leave nothing
+  // to reload from. See docs/20260625-pwa-updates.md.
+  // Own things only (family CLAUDE.md, shared-model-library naming rule 2; user
+  // 2026-10-01; edited by Claude Fable 5.1 2026-10-01): nearly every family app
+  // lives on the same origin, and caches / service workers are per origin, so
+  // "unregister all + delete all" would also wipe the sibling apps' offline
+  // shells and the family-shared model cache `pwa-models`.
   async function forcePwaReset() {
     if (!navigator.onLine) { setStatus("离线，先联网再强制更新"); return; }
     setStatus("清缓存重启中…");
     try {
       if (navigator.serviceWorker) {
-        const regs = await navigator.serviceWorker.getRegistrations();
-        for (const r of regs) await r.unregister().catch(() => {});
+        const r = await navigator.serviceWorker.getRegistration();
+        if (r) await r.unregister().catch(() => {});
       }
       if (typeof caches !== "undefined") {
         const keys = await caches.keys();
-        for (const k of keys) await caches.delete(k).catch(() => {});
+        for (const k of keys) { if (k.startsWith(SHELL_CACHE_PREFIX)) await caches.delete(k).catch(() => {}); }
       }
     } catch (_) { /* best-effort — reload anyway */ }
     setTimeout(() => location.reload(), 150);

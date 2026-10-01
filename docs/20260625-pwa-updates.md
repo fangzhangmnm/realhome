@@ -16,8 +16,9 @@
    - 路径 3 SW `postMessage({type:"asset-updated"})`（precache asset ETag 变 → SW fetch handler 广播）
    - 路径 4 `visibilitychange`/`focus`/`setInterval(10min)` → `reg.update()`（**iOS standalone PWA
      不自己 poll，这条是解药**）
-3. **强制更新（清缓存重启）** = 设置抽屉「强制更新」按钮 → `forcePwaReset()`：unregister 所有 SW +
-   `caches.delete` 全清 + reload。**世界数据在 IndexedDB，不动**。**离线时不清**（怕拉不回来 →
+3. **强制更新（清缓存重启）** = 设置抽屉「强制更新」按钮 → `forcePwaReset()`：unregister 管着当前页面的那个 SW +
+   只删 `realhome-` 前缀的缓存 + reload（2026-10-01 起只动自己的：同域名下还有兄弟 app 的离线壳和家族共享的模型缓存
+   `pwa-models`；`test/force-reset-scope.test.mjs` 守着。edited by Claude Fable 5.1 2026-10-01）。**世界数据在 IndexedDB，不动**。**离线时不清**（怕拉不回来 →
    `navigator.onLine` 守门）。这是「卡老版本、点刷新还是老的」时的逃生门。
 4. **版本水印** = 设置抽屉底 `#drawerVersion` 显示运行中 bundle 的 content hash（`realhome-<hash>.mjs`
    的 hash 就是版本号），运行时从 `<script>` 标签抠。force-update 后看 hash 变没变 = 视觉确认新码生效。
