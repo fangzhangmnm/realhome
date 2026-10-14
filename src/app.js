@@ -755,9 +755,8 @@ function installWorld(result, name) {
   // mouse left off in the previous world.
   if (!renderer.xr.isPresenting) camera.quaternion.identity();
   hudName.textContent = name;
-  // Updating document.title so the Quest "running in background" panel
-  // header reads cleanly (it inherits the tab title). See docs/20260521-ui-layers.md.
-  document.title = `RealHome — ${name}`;
+  // 网页标题永远只是「RealHome」（index.html 写死）：世界名进标题 = 浏览器历史按世界名记那个地址
+  //   （user 2026-10-14「就放一个自己的名字，不解释，google也这么干的」，全家族同一标准）。Quest 后台面板照样读到「RealHome」。
   const note = [];
   if (result.skyboxes.length) note.push(`skybox×${result.skyboxes.length}`);
   if (result.colliders.length) note.push(`collider×${result.colliders.length}`);
